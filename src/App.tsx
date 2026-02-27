@@ -43,6 +43,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Item, Employee, Table, Order, SalesStats, Addon } from './types';
+import { Analytics } from '@vercel/analytics/react';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -1903,6 +1904,7 @@ export default function App() {
       {view === 'customer' && <CustomerMenu />}
       {view === 'admin' && <AdminPanel onViewChange={setView} />}
       {view === 'kitchen' && <KitchenPanel onViewChange={setView} />}
+      <Analytics />
     </div>
   );
 }
