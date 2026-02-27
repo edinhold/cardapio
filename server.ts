@@ -80,7 +80,8 @@ async function startServer() {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
   // WebSocket broadcast helper
   const broadcast = (data: any) => {
@@ -100,10 +101,10 @@ async function startServer() {
   });
 
   app.post("/api/items", (req, res) => {
-    const { name, description, price, category, is_dish_of_day, image_url } = req.body;
+    const { name, description, price, category, is_dish_of_day, image_url, observation_info } = req.body;
     const result = db.prepare(
-      "INSERT INTO items (name, description, price, category, is_dish_of_day, image_url) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url);
+      "INSERT INTO items (name, description, price, category, is_dish_of_day, image_url, observation_info) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url, observation_info);
     res.json({ id: result.lastInsertRowid });
   });
 
@@ -171,6 +172,67 @@ async function startServer() {
     }
   });
 
+  app.patch("/api/tables/:id", (req, res) => {
+    const { status } = req.body;
+    db.prepare("UPDATE tables SET status = ? WHERE id = ?").run(status, req.params.id);
+    broadcast({ type: 'TABLE_UPDATED', id: req.params.id, status });
+    res.json({ success: true });
+  });
+
+  app.delete("/api/tables/:id", (req, res) => {
+    const orders = db.prepare("SELECT * FROM orders WHERE table_id = ? AND status != 'paid'").all(req.params.id);
+    if (orders.length > 0) {
+      return res.status(400).json({ error: "Cannot delete table with active orders" });
+    }
+    db.prepare("DELETE FROM tables WHERE id = ?").run(req.params.id);
+    broadcast({ type: 'TABLE_UPDATED', id: req.params.id, status: 'deleted' });
+    res.json({ success: true });
+  });
+
+  app.post("/api/tables/:id/close", (req, res) => {
+    const tableId = req.params.id;
+    const transaction = db.transaction(() => {
+      db.prepare("UPDATE orders SET status = 'paid' WHERE table_id = ? AND status != 'paid'").run(tableId);
+      db.prepare("UPDATE tables SET status = 'available' WHERE id = ?").run(tableId);
+    });
+    transaction();
+    broadcast({ type: 'TABLE_UPDATED', id: tableId, status: 'available' });
+    res.json({ success: true });
+  });
+
+  app.get("/api/tables/:id/orders", (req, res) => {
+    const orders = db.prepare(`
+      SELECT o.*, t.number as table_number 
+      FROM orders o 
+      LEFT JOIN tables t ON o.table_id = t.id
+      WHERE o.table_id = ? AND o.status != 'paid'
+      ORDER BY o.created_at DESC
+    `).all(req.params.id);
+    
+    const ordersWithItems = orders.map((order: any) => {
+      const items = db.prepare(`
+        SELECT oi.*, i.name 
+        FROM order_items oi 
+        JOIN items i ON oi.item_id = i.id 
+        WHERE oi.order_id = ?
+      `).all(order.id);
+
+      const itemsWithAddons = items.map((item: any) => {
+        const addons = db.prepare(`
+          SELECT oia.*, a.name 
+          FROM order_item_addons oia 
+          JOIN addons a ON oia.addon_id = a.id 
+          WHERE oia.order_item_id = ?
+        `).all(item.id);
+        return { ...item, addons };
+      });
+
+      return { ...order, items: itemsWithAddons };
+    });
+    
+    res.json(ordersWithItems);
+  });
+
   // Orders
   app.get("/api/orders", (req, res) => {
     const orders = db.prepare(`
@@ -232,11 +294,19 @@ async function startServer() {
           }
         }
       }
+
+      if (table_id) {
+        db.prepare("UPDATE tables SET status = 'occupied' WHERE id = ?").run(table_id);
+      }
       
       return orderId;
     });
 
     const orderId = transaction();
+    console.log(`Novo pedido criado: ID ${orderId}, Mesa ${table_id || 'Balcão'}`);
+    if (table_id) {
+      broadcast({ type: 'TABLE_UPDATED', id: table_id, status: 'occupied' });
+    }
     const newOrder = { id: orderId, table_id, total_price, status: 'pending', items };
     broadcast({ type: 'NEW_ORDER', order: newOrder });
     res.json({ id: orderId });
@@ -246,6 +316,17 @@ async function startServer() {
     const { status } = req.body;
     db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(status, req.params.id);
     broadcast({ type: 'ORDER_UPDATED', id: req.params.id, status });
+    res.json({ success: true });
+  });
+
+  app.delete("/api/orders/:id", (req, res) => {
+    const transaction = db.transaction(() => {
+      db.prepare("DELETE FROM order_item_addons WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)").run(req.params.id);
+      db.prepare("DELETE FROM order_items WHERE order_id = ?").run(req.params.id);
+      db.prepare("DELETE FROM orders WHERE id = ?").run(req.params.id);
+    });
+    transaction();
+    broadcast({ type: 'ORDER_UPDATED', id: req.params.id, status: 'deleted' });
     res.json({ success: true });
   });
 

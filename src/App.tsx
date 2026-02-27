@@ -15,7 +15,8 @@ import {
   X,
   PlusCircle,
   Bell,
-  Search
+  Search,
+  Info
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -94,6 +95,7 @@ const AdminDashboard = () => {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log('Admin: Mensagem recebida:', data.type);
           if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
             fetchOrders();
             // Also refresh stats on new order
@@ -104,7 +106,12 @@ const AdminDashboard = () => {
         } catch (e) { console.error('WS error:', e); }
       };
 
+      ws.onopen = () => {
+        console.log('Admin: Conectado ao servidor de pedidos');
+      };
+
       ws.onclose = () => {
+        console.log('Admin: Conexão fechada, tentando reconectar...');
         reconnectTimer = setTimeout(connect, 3000);
       };
     };
@@ -181,6 +188,7 @@ const MenuManagement = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -228,6 +236,21 @@ const MenuManagement = () => {
     setShowForm(true);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert('A imagem é muito grande. Por favor, escolha uma imagem com menos de 2MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData({ ...formData, image_url: reader.result as string });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -235,19 +258,29 @@ const MenuManagement = () => {
       return;
     }
 
-    const url = editingItem ? `/api/items/${editingItem.id}` : '/api/items';
-    const method = editingItem ? 'PATCH' : 'POST';
+    setIsSaving(true);
+    try {
+      const url = editingItem ? `/api/items/${editingItem.id}` : '/api/items';
+      const method = editingItem ? 'PATCH' : 'POST';
 
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...formData, price: parseFloat(formData.price) })
-    });
-    
-    setFormData({ name: '', description: '', price: '', category: 'dish', is_dish_of_day: false, image_url: '', observation_info: '' });
-    setEditingItem(null);
-    setShowForm(false);
-    fetchItems();
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, price: parseFloat(formData.price) })
+      });
+
+      if (!res.ok) throw new Error('Erro ao salvar item');
+      
+      setFormData({ name: '', description: '', price: '', category: 'dish', is_dish_of_day: false, image_url: '', observation_info: '' });
+      setEditingItem(null);
+      setShowForm(false);
+      fetchItems();
+    } catch (err) {
+      alert('Erro ao salvar item. Verifique se a imagem não é muito grande.');
+      console.error(err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const deleteItem = async (e: React.MouseEvent, id: number) => {
@@ -351,14 +384,36 @@ const MenuManagement = () => {
                     <option value="drink">Bebida</option>
                   </select>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-stone-400">URL da Imagem (JPG, PNG)</label>
-                  <input 
-                    placeholder="Cole o link da imagem aqui..." 
-                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
-                    value={formData.image_url}
-                    onChange={e => setFormData({...formData, image_url: e.target.value})}
-                  />
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-stone-400">Imagem do Item</label>
+                  <div className="flex items-center gap-4">
+                    {formData.image_url && (
+                      <div className="w-16 h-16 rounded-xl overflow-hidden border border-stone-200">
+                        <img src={formData.image_url} alt="Preview" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <label className="flex-1 cursor-pointer">
+                      <div className="w-full px-4 py-3 rounded-xl border-2 border-dashed border-stone-200 hover:border-stone-900 transition-colors flex items-center justify-center gap-2 text-stone-500 hover:text-stone-900">
+                        <Plus size={18} />
+                        <span className="text-sm font-bold uppercase tracking-wider">Carregar Foto</span>
+                      </div>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange={handleFileChange}
+                      />
+                    </label>
+                  </div>
+                  {formData.image_url && (
+                    <button 
+                      type="button"
+                      onClick={() => setFormData({...formData, image_url: ''})}
+                      className="text-[10px] text-red-500 font-bold uppercase tracking-widest hover:underline"
+                    >
+                      Remover Imagem
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold uppercase text-stone-400">Info de Observação (ex: "Sem cebola?")</label>
@@ -378,8 +433,15 @@ const MenuManagement = () => {
                   />
                   <span className="text-sm font-medium text-stone-700">Prato do Dia</span>
                 </label>
-                <button type="submit" className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-stone-800 transition-colors">
-                  {editingItem ? 'Salvar Alterações' : 'Salvar Item'}
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  className={cn(
+                    "w-full bg-stone-900 text-white py-4 rounded-xl font-bold transition-all",
+                    isSaving ? "opacity-50 cursor-not-allowed" : "hover:bg-stone-800"
+                  )}
+                >
+                  {isSaving ? 'Salvando...' : (editingItem ? 'Salvar Alterações' : 'Salvar Item')}
                 </button>
               </form>
             </motion.div>
@@ -454,16 +516,81 @@ const EmployeeManagement = () => {
 const TableManagement = () => {
   const [tables, setTables] = useState<Table[]>([]);
   const [number, setNumber] = useState('');
+  const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+  const [tableOrders, setTableOrders] = useState<Order[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
 
   const fetchTables = () => 
     fetch('/api/tables')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch tables');
-        return res.json();
-      })
+      .then(res => res.json())
       .then(setTables)
       .catch(err => console.error('Tables fetch error:', err));
-  useEffect(() => { fetchTables(); }, []);
+
+  useEffect(() => { 
+    fetchTables();
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'TABLE_UPDATED' || data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
+        fetchTables();
+        if (selectedTableRef.current && (
+          data.type === 'NEW_ORDER' || 
+          data.type === 'ORDER_UPDATED' || 
+          (data.type === 'TABLE_UPDATED' && parseInt(data.id) === selectedTableRef.current.id)
+        )) {
+          fetchTableOrders(selectedTableRef.current.id);
+        }
+      }
+    };
+    return () => ws.close();
+  }, []);
+
+  const selectedTableRef = useRef<Table | null>(null);
+  useEffect(() => {
+    selectedTableRef.current = selectedTable;
+  }, [selectedTable]);
+
+  const fetchTableOrders = async (tableId: number) => {
+    setLoadingOrders(true);
+    try {
+      const res = await fetch(`/api/tables/${tableId}/orders`);
+      const data = await res.json();
+      setTableOrders(data);
+    } catch (err) {
+      console.error('Error fetching table orders:', err);
+    } finally {
+      setLoadingOrders(false);
+    }
+  };
+
+  const handleTableClick = async (table: Table) => {
+    setSelectedTable(table);
+    fetchTableOrders(table.id);
+  };
+
+  const closeBill = async () => {
+    if (!selectedTable) return;
+    
+    const confirmClose = window.confirm(
+      tableOrders.length > 0 
+        ? `Deseja fechar a conta da Mesa ${selectedTable.number}?` 
+        : `Deseja liberar a Mesa ${selectedTable.number}?`
+    );
+    if (!confirmClose) return;
+
+    try {
+      const res = await fetch(`/api/tables/${selectedTable.id}/close`, { method: 'POST' });
+      if (!res.ok) throw new Error('Erro ao fechar conta');
+
+      setSelectedTable(null);
+      fetchTables();
+    } catch (err) {
+      console.error('Error closing bill:', err);
+      alert('Erro ao fechar conta. Por favor, tente novamente.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -475,6 +602,19 @@ const TableManagement = () => {
     setNumber('');
     fetchTables();
   };
+
+  const deleteTable = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    if (!confirm('Tem certeza que deseja remover esta mesa permanentemente?')) return;
+    const res = await fetch(`/api/tables/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json();
+      alert(data.error || 'Erro ao remover mesa');
+    }
+    fetchTables();
+  };
+
+  const tableTotal = tableOrders.reduce((sum, order) => sum + order.total_price, 0);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -491,8 +631,18 @@ const TableManagement = () => {
       </div>
       <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
         {tables.map(table => (
-          <div key={table.id} className="bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2">
-            <TableIcon size={32} className="text-stone-300" />
+          <button 
+            key={table.id} 
+            onClick={() => handleTableClick(table)}
+            className="bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group"
+          >
+            <button 
+              onClick={(e) => deleteTable(e, table.id)}
+              className="absolute top-2 right-2 p-2 text-stone-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+            >
+              <Trash2 size={14} />
+            </button>
+            <TableIcon size={32} className={cn(table.status === 'available' ? "text-stone-300" : "text-red-400")} />
             <span className="font-bold text-xl">Mesa {table.number}</span>
             <span className={cn(
               "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
@@ -500,9 +650,101 @@ const TableManagement = () => {
             )}>
               {table.status === 'available' ? 'Disponível' : 'Ocupada'}
             </span>
-          </div>
+          </button>
         ))}
       </div>
+
+      <AnimatePresence>
+        {selectedTable && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold italic">Mesa {selectedTable.number} - Extrato</h3>
+                <button onClick={() => setSelectedTable(null)} className="text-stone-400 hover:text-stone-900"><X /></button>
+              </div>
+
+              {loadingOrders ? (
+                <div className="py-10 text-center text-stone-400">Carregando pedidos...</div>
+              ) : (
+                <div className="space-y-6">
+                  {tableOrders.length === 0 ? (
+                    <div className="py-10 text-center text-stone-400 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
+                      Nenhum pedido em aberto para esta mesa.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {tableOrders.map(order => (
+                        <div key={order.id} className="border-b border-stone-100 pb-4 last:border-0">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-stone-900">Pedido #{order.id}</span>
+                              <span className={cn(
+                                "text-[9px] uppercase font-bold px-1.5 py-0.5 rounded",
+                                order.status === 'pending' && "bg-stone-100 text-stone-500",
+                                order.status === 'preparing' && "bg-amber-100 text-amber-700",
+                                order.status === 'ready' && "bg-blue-100 text-blue-700",
+                                order.status === 'delivered' && "bg-emerald-100 text-emerald-700"
+                              )}>
+                                {order.status}
+                              </span>
+                            </div>
+                            <span className="text-stone-500 text-xs">{new Date(order.created_at).toLocaleTimeString()}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="space-y-0.5">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-stone-600 font-medium">{item.quantity}x {item.name}</span>
+                                  <span className="text-stone-400">R$ {(item.price_at_time * item.quantity).toFixed(2)}</span>
+                                </div>
+                                {item.addons && item.addons.length > 0 && (
+                                  <div className="pl-4 text-[10px] text-emerald-600 italic">
+                                    {item.addons.map(a => `+ ${a.name}`).join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t-2 border-stone-900 flex justify-between items-center">
+                    <span className="text-xl font-bold uppercase tracking-widest">Total</span>
+                    <span className="text-2xl font-bold text-stone-900">R$ {tableTotal.toFixed(2)}</span>
+                  </div>
+
+                  <button 
+                    onClick={closeBill}
+                    className={cn(
+                      "w-full py-5 rounded-full font-bold text-lg transition-all shadow-xl flex items-center justify-center gap-2",
+                      tableOrders.length > 0 
+                        ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
+                        : "bg-stone-200 text-stone-600 hover:bg-stone-300 shadow-stone-100"
+                    )}
+                  >
+                    {tableOrders.length > 0 ? (
+                      <>
+                        <CheckCircle2 size={24} /> Fechar Conta e Liberar Mesa
+                      </>
+                    ) : (
+                      <>
+                        <X size={24} /> Liberar Mesa Ocupada
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -686,6 +928,8 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
 
 const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [kitchenTab, setKitchenTab] = useState<'active' | 'history'>('active');
+  const [historyFilter, setHistoryFilter] = useState<'day' | 'week'>('day');
   const [showNotification, setShowNotification] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
@@ -717,11 +961,13 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
       
       ws.onopen = () => {
         setIsConnected(true);
+        console.log('Conectado ao servidor de pedidos em tempo real');
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log('Mensagem recebida:', data.type);
           if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
             fetchOrders();
             
@@ -767,6 +1013,12 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     fetchOrders();
   };
 
+  const deleteOrder = async (id: number) => {
+    if (!confirm('Tem certeza que deseja excluir este pedido permanentemente?')) return;
+    await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+    fetchOrders();
+  };
+
   const handlePrint = (order: Order) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -797,6 +1049,21 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   };
 
   const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'delivered');
+  
+  const historyOrders = orders.filter(o => {
+    if (o.status !== 'paid' && o.status !== 'delivered') return false;
+    const orderDate = new Date(o.created_at);
+    const now = new Date();
+    if (historyFilter === 'day') {
+      return orderDate.toDateString() === now.toDateString();
+    } else {
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(now.getDate() - 7);
+      return orderDate >= oneWeekAgo;
+    }
+  });
+
+  const displayOrders = kitchenTab === 'active' ? activeOrders : historyOrders;
 
   return (
     <div className="min-h-screen bg-stone-900 text-white p-8 relative overflow-hidden">
@@ -856,6 +1123,60 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
           </div>
         </div>
         <div className="flex items-center gap-6">
+          <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
+            <button 
+              onClick={() => setKitchenTab('active')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
+                kitchenTab === 'active' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
+              )}
+            >
+              Ativos
+            </button>
+            <button 
+              onClick={() => setKitchenTab('history')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
+                kitchenTab === 'history' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
+              )}
+            >
+              Histórico
+            </button>
+          </div>
+          
+          {kitchenTab === 'history' && (
+            <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
+              <button 
+                onClick={() => setHistoryFilter('day')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                  historyFilter === 'day' ? "bg-stone-600 text-white" : "text-stone-500 hover:text-stone-300"
+                )}
+              >
+                Hoje
+              </button>
+              <button 
+                onClick={() => setHistoryFilter('week')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                  historyFilter === 'week' ? "bg-stone-600 text-white" : "text-stone-500 hover:text-stone-300"
+                )}
+              >
+                Semana
+              </button>
+            </div>
+          )}
+
+          <button 
+            onClick={() => {
+              if (audioRef.current) {
+                audioRef.current.play().catch(e => alert('Clique na página primeiro para permitir o som.'));
+              }
+            }}
+            className="text-[10px] uppercase tracking-widest text-stone-500 hover:text-white transition-colors"
+          >
+            Testar Som
+          </button>
           <button 
             onClick={() => setAudioEnabled(!audioEnabled)}
             className={cn(
@@ -878,15 +1199,19 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        <AnimatePresence>
-          {activeOrders.map(order => (
+        <AnimatePresence mode="popLayout">
+          {displayOrders.map(order => (
             <motion.div 
               key={order.id}
               layout
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-stone-800 rounded-3xl p-6 border border-stone-700 flex flex-col h-full"
+              className={cn(
+                "bg-stone-800 rounded-3xl p-6 border flex flex-col h-full transition-colors",
+                order.status === 'ready' ? "border-blue-500/30" : "border-stone-700",
+                (order.status === 'paid' || order.status === 'delivered') && "opacity-75"
+              )}
             >
               <div className="flex justify-between items-start mb-6">
                 <div>
@@ -901,31 +1226,58 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                   </p>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Pedido</span>
-                  <div className="flex items-center justify-end gap-2">
+                  <div className="flex items-center justify-end gap-2 mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Pedido</span>
+                    {kitchenTab === 'history' && (
+                      <button 
+                        onClick={() => deleteOrder(order.id)}
+                        className="text-red-500 hover:text-red-400 transition-colors p-1"
+                        title="Excluir Pedido"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end">
                     <span className="text-xs text-stone-400 font-mono">
                       {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                     <p className="text-lg font-mono">#{order.id}</p>
+                    {kitchenTab === 'history' && (
+                      <span className="text-[10px] text-stone-500">
+                        {new Date(order.created_at).toLocaleDateString()}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="flex-1 space-y-3 mb-8">
                 {order.items.map((item, idx) => (
-                  <div key={idx} className="border-b border-stone-700/50 pb-2">
-                    <div className="flex justify-between items-center">
-                      <span className="font-medium">{item.name}</span>
-                      <span className="bg-stone-700 px-2 py-1 rounded text-xs font-bold">x{item.quantity}</span>
+                  <div key={idx} className="border-b border-stone-700/50 pb-2 last:border-0">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="font-bold text-stone-200">{item.name}</p>
+                        {item.observation && (
+                          <div className="flex items-center gap-1.5 mt-1 bg-yellow-500/10 px-2 py-1 rounded-lg w-fit">
+                            <Info size={12} className="text-yellow-500" />
+                            <p className="text-[11px] text-yellow-500 font-medium italic">{item.observation}</p>
+                          </div>
+                        )}
+                        {item.addons && item.addons.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {item.addons.map((a, aidx) => (
+                              <span key={aidx} className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-tighter">
+                                + {a.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <span className="bg-stone-700 text-white px-2.5 py-1 rounded-xl text-xs font-black ml-4">
+                        {item.quantity}x
+                      </span>
                     </div>
-                    {item.observation && (
-                      <p className="text-xs text-yellow-500 italic mt-1">Obs: {item.observation}</p>
-                    )}
-                    {item.addons && item.addons.length > 0 && (
-                      <p className="text-[10px] text-emerald-400 mt-1">
-                        + {item.addons.map(a => a.name).join(', ')}
-                      </p>
-                    )}
                   </div>
                 ))}
               </div>
@@ -948,6 +1300,16 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                       <CheckCircle2 size={18} /> Pronto
                     </button>
                   )}
+                  {kitchenTab === 'history' && order.status === 'paid' && (
+                    <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
+                      Pago
+                    </div>
+                  )}
+                  {kitchenTab === 'history' && order.status === 'delivered' && (
+                    <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
+                      Entregue
+                    </div>
+                  )}
                   <button 
                     onClick={() => handlePrint(order)}
                     className="bg-stone-700 hover:bg-stone-600 p-3 rounded-xl transition-colors"
@@ -958,9 +1320,9 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                 {order.status === 'ready' && (
                   <button 
                     onClick={() => updateStatus(order.id, 'delivered')}
-                    className="w-full bg-stone-700 hover:bg-stone-600 text-white py-3 rounded-xl font-bold transition-colors"
+                    className="w-full bg-stone-100 text-stone-900 py-3 rounded-xl font-bold hover:bg-white transition-colors uppercase text-xs tracking-widest"
                   >
-                    Entregue
+                    Entregar Pedido
                   </button>
                 )}
               </div>
@@ -984,6 +1346,7 @@ const CustomerMenu = () => {
   }[]>([]);
   const [category, setCategory] = useState<'all' | 'dish' | 'drink'>('all');
   const [orderSent, setOrderSent] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [showCartDetails, setShowCartDetails] = useState(false);
   const [addons, setAddons] = useState<Addon[]>([]);
   const [customizingItem, setCustomizingItem] = useState<Item | null>(null);
@@ -1051,24 +1414,36 @@ const CustomerMenu = () => {
   const sendOrder = async () => {
     if (selectedTable === null) return alert('Por favor, selecione sua mesa ou retirada no balcão.');
     
-    await fetch('/api/orders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        table_id: selectedTable === -1 ? null : selectedTable,
-        items: cart.map(i => ({ 
-          id: i.item.id, 
-          quantity: i.quantity, 
-          price: i.item.price,
-          observation: i.observation,
-          selectedAddons: i.selectedAddons
-        })),
-        total_price: total
-      })
-    });
-    setCart([]);
-    setOrderSent(true);
-    setTimeout(() => setOrderSent(false), 5000);
+    setIsSending(true);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table_id: selectedTable === -1 ? null : selectedTable,
+          items: cart.map(i => ({ 
+            id: i.item.id, 
+            quantity: i.quantity, 
+            price: i.item.price,
+            observation: i.observation,
+            selectedAddons: i.selectedAddons
+          })),
+          total_price: total
+        })
+      });
+
+      if (!res.ok) throw new Error('Erro ao enviar pedido');
+
+      setCart([]);
+      setOrderSent(true);
+      setShowCartDetails(false);
+      setTimeout(() => setOrderSent(false), 5000);
+    } catch (err) {
+      alert('Erro ao enviar pedido. Por favor, tente novamente.');
+      console.error(err);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const filteredItems = category === 'all' ? items : items.filter(i => i.category === category);
@@ -1316,9 +1691,13 @@ const CustomerMenu = () => {
                 </button>
                 <button 
                   onClick={sendOrder}
-                  className="bg-white text-stone-900 px-8 py-3 rounded-full font-sans font-bold uppercase text-xs tracking-widest hover:bg-stone-100 transition-colors"
+                  disabled={isSending}
+                  className={cn(
+                    "bg-white text-stone-900 px-8 py-3 rounded-full font-sans font-bold uppercase text-xs tracking-widest transition-all",
+                    isSending ? "opacity-50 cursor-not-allowed" : "hover:bg-stone-100"
+                  )}
                 >
-                  Finalizar Pedido
+                  {isSending ? 'Enviando...' : 'Finalizar Pedido'}
                 </button>
               </div>
             </div>
