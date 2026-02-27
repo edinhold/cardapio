@@ -6,6 +6,7 @@ export interface Item {
   category: 'dish' | 'drink';
   is_dish_of_day: number;
   image_url: string;
+  icon?: string;
   observation_info?: string;
 }
 

@@ -17,6 +17,7 @@ db.exec(`
     category TEXT NOT NULL, -- 'dish', 'drink'
     is_dish_of_day INTEGER DEFAULT 0,
     image_url TEXT,
+    icon TEXT,
     observation_info TEXT
   );
 
@@ -75,6 +76,13 @@ try {
   // Column probably already exists
 }
 
+// Migration: Ensure icon column exists in items
+try {
+  db.prepare("ALTER TABLE items ADD COLUMN icon TEXT").run();
+} catch (e) {
+  // Column probably already exists
+}
+
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
@@ -101,10 +109,10 @@ async function startServer() {
   });
 
   app.post("/api/items", (req, res) => {
-    const { name, description, price, category, is_dish_of_day, image_url, observation_info } = req.body;
+    const { name, description, price, category, is_dish_of_day, image_url, icon, observation_info } = req.body;
     const result = db.prepare(
-      "INSERT INTO items (name, description, price, category, is_dish_of_day, image_url, observation_info) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url, observation_info);
+      "INSERT INTO items (name, description, price, category, is_dish_of_day, image_url, icon, observation_info) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url, icon, observation_info);
     res.json({ id: result.lastInsertRowid });
   });
 
@@ -114,10 +122,10 @@ async function startServer() {
   });
 
   app.patch("/api/items/:id", (req, res) => {
-    const { name, description, price, category, is_dish_of_day, image_url, observation_info } = req.body;
+    const { name, description, price, category, is_dish_of_day, image_url, icon, observation_info } = req.body;
     db.prepare(
-      "UPDATE items SET name = ?, description = ?, price = ?, category = ?, is_dish_of_day = ?, image_url = ?, observation_info = ? WHERE id = ?"
-    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url, observation_info, req.params.id);
+      "UPDATE items SET name = ?, description = ?, price = ?, category = ?, is_dish_of_day = ?, image_url = ?, icon = ?, observation_info = ? WHERE id = ?"
+    ).run(name, description, price, category, is_dish_of_day ? 1 : 0, image_url, icon, observation_info, req.params.id);
     res.json({ success: true });
   });
 
@@ -154,6 +162,11 @@ async function startServer() {
     const { name, role } = req.body;
     const result = db.prepare("INSERT INTO employees (name, role) VALUES (?, ?)").run(name, role);
     res.json({ id: result.lastInsertRowid });
+  });
+
+  app.delete("/api/employees/:id", (req, res) => {
+    db.prepare("DELETE FROM employees WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
   });
 
   // Tables

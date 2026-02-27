@@ -16,7 +16,17 @@ import {
   PlusCircle,
   Bell,
   Search,
-  Info
+  Info,
+  Coffee,
+  Pizza,
+  IceCream,
+  Wine,
+  Soup,
+  Flame,
+  Fish,
+  Beef,
+  Apple,
+  Cake
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -184,6 +194,10 @@ const AdminDashboard = () => {
   );
 };
 
+const IconMap: Record<string, any> = {
+  Coffee, Pizza, IceCream, Wine, Soup, Flame, Fish, Beef, Apple, Cake, UtensilsCrossed, Beer
+};
+
 const MenuManagement = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -196,6 +210,7 @@ const MenuManagement = () => {
     category: 'dish',
     is_dish_of_day: false,
     image_url: '',
+    icon: '',
     observation_info: ''
   });
 
@@ -219,6 +234,7 @@ const MenuManagement = () => {
         category: item.category,
         is_dish_of_day: item.is_dish_of_day === 1,
         image_url: item.image_url || '',
+        icon: item.icon || '',
         observation_info: item.observation_info || ''
       });
     } else {
@@ -230,6 +246,7 @@ const MenuManagement = () => {
         category: 'dish',
         is_dish_of_day: false,
         image_url: '',
+        icon: '',
         observation_info: ''
       });
     }
@@ -271,7 +288,7 @@ const MenuManagement = () => {
 
       if (!res.ok) throw new Error('Erro ao salvar item');
       
-      setFormData({ name: '', description: '', price: '', category: 'dish', is_dish_of_day: false, image_url: '', observation_info: '' });
+      setFormData({ name: '', description: '', price: '', category: 'dish', is_dish_of_day: false, image_url: '', icon: '', observation_info: '' });
       setEditingItem(null);
       setShowForm(false);
       fetchItems();
@@ -315,7 +332,11 @@ const MenuManagement = () => {
                 <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-stone-400">
-                  {item.category === 'dish' ? <UtensilsCrossed size={32} /> : <Beer size={32} />}
+                  {item.icon && IconMap[item.icon] ? (
+                    React.createElement(IconMap[item.icon], { size: 32 })
+                  ) : (
+                    item.category === 'dish' ? <UtensilsCrossed size={32} /> : <Beer size={32} />
+                  )}
                 </div>
               )}
               {item.is_dish_of_day === 1 && (
@@ -383,6 +404,24 @@ const MenuManagement = () => {
                     <option value="dish">Prato</option>
                     <option value="drink">Bebida</option>
                   </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-stone-400">Ícone do Item</label>
+                  <div className="grid grid-cols-6 gap-2">
+                    {Object.keys(IconMap).map(iconName => (
+                      <button
+                        key={iconName}
+                        type="button"
+                        onClick={() => setFormData({...formData, icon: iconName})}
+                        className={cn(
+                          "p-2 rounded-lg border transition-all flex items-center justify-center",
+                          formData.icon === iconName ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-100 text-stone-400 hover:border-stone-300"
+                        )}
+                      >
+                        {React.createElement(IconMap[iconName], { size: 18 })}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-stone-400">Imagem do Item</label>
@@ -457,6 +496,12 @@ const EmployeeManagement = () => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
 
+  const deleteEmployee = async (id: number) => {
+    if (!confirm('Remover este funcionário?')) return;
+    await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+    fetchEmployees();
+  };
+
   const fetchEmployees = () => 
     fetch('/api/employees')
       .then(res => {
@@ -498,14 +543,22 @@ const EmployeeManagement = () => {
       </div>
       <div className="lg:col-span-2 space-y-4">
         {employees.map(emp => (
-          <div key={emp.id} className="bg-white p-6 rounded-2xl border border-stone-100 flex items-center gap-4">
-            <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center text-stone-400">
-              <Users size={24} />
+          <div key={emp.id} className="bg-white p-6 rounded-2xl border border-stone-100 flex items-center justify-between group">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-stone-100 rounded-full flex items-center justify-center text-stone-400">
+                <Users size={24} />
+              </div>
+              <div>
+                <h4 className="font-bold">{emp.name}</h4>
+                <p className="text-stone-500 text-sm">{emp.role}</p>
+              </div>
             </div>
-            <div>
-              <h4 className="font-bold">{emp.name}</h4>
-              <p className="text-stone-500 text-sm">{emp.role}</p>
-            </div>
+            <button 
+              onClick={() => deleteEmployee(emp.id)}
+              className="p-2 text-stone-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+            >
+              <Trash2 size={18} />
+            </button>
           </div>
         ))}
       </div>
@@ -1123,6 +1176,20 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
           </div>
         </div>
         <div className="flex items-center gap-6">
+          <button 
+            onClick={() => {
+              setAudioEnabled(!audioEnabled);
+              if (!audioEnabled && audioRef.current) {
+                audioRef.current.play().catch(() => {});
+              }
+            }}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-xl border transition-all text-xs font-bold uppercase tracking-widest",
+              audioEnabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-stone-800 text-stone-500 border-stone-700 hover:text-white"
+            )}
+          >
+            <Bell size={14} /> {audioEnabled ? 'Som Ativado' : 'Testar Som'}
+          </button>
           <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
             <button 
               onClick={() => setKitchenTab('active')}
@@ -1561,13 +1628,22 @@ const CustomerMenu = () => {
                   <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-stone-400">
-                    {item.category === 'dish' ? <UtensilsCrossed size={40} /> : <Beer size={40} />}
+                    {item.icon && IconMap[item.icon] ? (
+                      React.createElement(IconMap[item.icon], { size: 40 })
+                    ) : (
+                      item.category === 'dish' ? <UtensilsCrossed size={40} /> : <Beer size={40} />
+                    )}
                   </div>
                 )}
               </div>
               <div className="flex-1 text-center md:text-left">
                 <div className="flex flex-col md:flex-row md:items-baseline justify-between gap-2 mb-2">
-                  <h3 className="text-2xl font-bold italic text-stone-900">{item.name}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-2xl font-bold italic text-stone-900">{item.name}</h3>
+                    {item.is_dish_of_day === 1 && (
+                      <span className="bg-emerald-500 text-white text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-full">Prato do Dia</span>
+                    )}
+                  </div>
                   <div className="flex-1 border-b border-dotted border-stone-300 mx-4 hidden md:block" />
                   <span className="text-xl font-bold text-stone-900">R$ {item.price.toFixed(2)}</span>
                 </div>
