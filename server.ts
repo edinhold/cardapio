@@ -345,9 +345,9 @@ async function startServer() {
 
   // CRM / Sales Stats
   app.get("/api/stats", (req, res) => {
-    const daily = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) = date('now')").get();
-    const weekly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-7 days')").get();
-    const monthly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-30 days')").get();
+    const daily = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) = date('now')").get() as { total: number | null } | undefined;
+    const weekly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-7 days')").get() as { total: number | null } | undefined;
+    const monthly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-30 days')").get() as { total: number | null } | undefined;
     
     const salesOverTime = db.prepare(`
       SELECT date(created_at) as date, SUM(total_price) as total 
@@ -358,9 +358,9 @@ async function startServer() {
     `).all();
 
     res.json({
-      daily: daily.total || 0,
-      weekly: weekly.total || 0,
-      monthly: monthly.total || 0,
+      daily: daily?.total || 0,
+      weekly: weekly?.total || 0,
+      monthly: monthly?.total || 0,
       salesOverTime
     });
   });
