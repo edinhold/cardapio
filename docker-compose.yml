@@ -10,17 +10,5 @@ services:
       - DATABASE_PATH=/app/data/restaurant.db
     restart: always
 
-  # Cloudflare Tunnel (Optional)
-  # To use: Set CLOUDFLARE_TUNNEL_TOKEN in your .env file
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: restaurant-tunnel
-    restart: always
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on:
-      - app
-
 volumes:
   data:
