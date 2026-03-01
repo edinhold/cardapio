@@ -1,0 +1,16 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  
+  # Redirecionar chamadas de API para o servidor Node (se estiver rodando na mesma máquina porta 3000)
+  # Remova o comentário das linhas abaixo se quiser que o Apache faça o Proxy
+  # ProxyPass /api http://localhost:3000/api
+  # ProxyPassReverse /api http://localhost:3000/api
+  # ProxyPass /ws ws://localhost:3000
+  # ProxyPassReverse /ws ws://localhost:3000
+
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>

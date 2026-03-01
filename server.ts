@@ -1,11 +1,11 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import Database from "better-sqlite3";
 import path from "path";
 
-const db = new Database("restaurant.db");
+const dbPath = process.env.DATABASE_PATH || "restaurant.db";
+const db = new Database(dbPath);
 
 // Initialize Database
 db.exec(`
@@ -366,12 +366,20 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  const isProd = process.env.NODE_ENV === "production";
+  
+  if (!isProd) {
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.warn("Vite not found, falling back to static serving if dist exists");
+      app.use(express.static(path.join(process.cwd(), "dist")));
+    }
   } else {
     app.use(express.static(path.join(process.cwd(), "dist")));
     app.get("*", (req, res) => {
