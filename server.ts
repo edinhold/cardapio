@@ -85,6 +85,20 @@ try {
 
 async function startServer() {
   const app = express();
+  
+  // Trust Cloudflare proxy headers
+  app.set('trust proxy', true);
+
+  // Middleware to ensure we use Cloudflare's real IP if available
+  app.use((req, res, next) => {
+    const cfIp = req.headers['cf-connecting-ip'];
+    if (cfIp) {
+      // In some cases you might want to force req.ip to this value
+      // but 'trust proxy' already handles X-Forwarded-For which CF sends.
+    }
+    next();
+  });
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
 
