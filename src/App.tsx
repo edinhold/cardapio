@@ -80,11 +80,16 @@ const AdminDashboard = () => {
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
 
   useEffect(() => {
-    fetch('/api/stats')
-      .then(res => res.json())
-      .then(setStats)
-      .catch(err => console.error('Stats fetch error:', err));
-    
+    const fetchStats = () => {
+      fetch('/api/stats')
+        .then(res => res.json())
+        .then(setStats)
+        .catch(err => {
+          console.error('Stats fetch error:', err);
+          alert('Erro ao carregar estatísticas.');
+        });
+    };
+
     const fetchOrders = () => {
       fetch('/api/orders')
         .then(res => res.json())
@@ -92,6 +97,7 @@ const AdminDashboard = () => {
         .catch(err => console.error('Orders fetch error:', err));
     };
 
+    fetchStats();
     fetchOrders();
 
     // WebSocket for instant updates
@@ -253,18 +259,52 @@ const MenuManagement = () => {
     setShowForm(true);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const resizeImage = (file: File, maxWidth: number = 800, maxHeight: number = 600): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > maxWidth) {
+              height *= maxWidth / width;
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width *= maxHeight / height;
+              height = maxHeight;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7)); // Compress to JPEG with 70% quality
+        };
+        img.onerror = reject;
+      };
+      reader.onerror = reject;
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('A imagem é muito grande. Por favor, escolha uma imagem com menos de 2MB.');
-        return;
+      try {
+        const resizedImage = await resizeImage(file);
+        setFormData({ ...formData, image_url: resizedImage });
+      } catch (err) {
+        console.error('Error resizing image:', err);
+        alert('Erro ao processar imagem.');
       }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData({ ...formData, image_url: reader.result as string });
-      };
-      reader.readAsDataURL(file);
     }
   };
 
@@ -993,14 +1033,38 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     audioEnabledRef.current = audioEnabled;
   }, [audioEnabled]);
 
-  const fetchOrders = () => 
-    fetch('/api/orders')
+  const fetchOrders = () => {
+    const statusFilter = kitchenTab === 'active' ? 'active' : '';
+    fetch(`/api/orders?status=${statusFilter}`)
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch orders');
         return res.json();
       })
-      .then(setOrders)
-      .catch(err => console.error('Orders fetch error:', err));
+      .then(data => {
+        if (kitchenTab === 'history') {
+          // Additional client-side filtering for history if needed
+          const filtered = data.filter((o: Order) => {
+            if (o.status !== 'paid' && o.status !== 'delivered') return false;
+            const orderDate = new Date(o.created_at);
+            const now = new Date();
+            if (historyFilter === 'day') {
+              return orderDate.toDateString() === now.toDateString();
+            } else {
+              const oneWeekAgo = new Date();
+              oneWeekAgo.setDate(now.getDate() - 7);
+              return orderDate >= oneWeekAgo;
+            }
+          });
+          setOrders(filtered);
+        } else {
+          setOrders(data);
+        }
+      })
+      .catch(err => {
+        console.error('Orders fetch error:', err);
+        alert('Erro ao carregar pedidos da cozinha.');
+      });
+  };
 
   useEffect(() => {
     fetchOrders();
@@ -1148,7 +1212,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         )}
       </AnimatePresence>
 
-      <header className="flex justify-between items-center mb-10">
+      <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-10">
         <div className="flex items-center gap-6">
           <button 
             onClick={() => onViewChange('admin')}
@@ -1162,20 +1226,18 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
               <ChefHat size={32} />
             </div>
             <div>
-              <h1 className="text-3xl font-bold">Painel da Cozinha</h1>
+              <h1 className="text-3xl font-bold">Cozinha</h1>
               <div className="flex items-center gap-2">
-                <p className="text-stone-400">Gerenciamento de pedidos em tempo real</p>
-                <div className="flex items-center gap-1.5 ml-2">
-                  <div className={cn("w-2 h-2 rounded-full animate-pulse", isConnected ? "bg-emerald-500" : "bg-red-500")} />
-                  <span className="text-[10px] uppercase tracking-widest font-bold text-stone-500">
-                    {isConnected ? 'Live' : 'Desconectado'}
-                  </span>
-                </div>
+                <div className={cn("w-2 h-2 rounded-full animate-pulse", isConnected ? "bg-emerald-500" : "bg-red-500")} />
+                <span className="text-[10px] uppercase tracking-widest font-bold text-stone-500">
+                  {isConnected ? 'Live' : 'Desconectado'}
+                </span>
               </div>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-6">
+
+        <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => {
               setAudioEnabled(!audioEnabled);
@@ -1188,8 +1250,10 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
               audioEnabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-stone-800 text-stone-500 border-stone-700 hover:text-white"
             )}
           >
-            <Bell size={14} /> {audioEnabled ? 'Som Ativado' : 'Testar Som'}
+            <Bell size={14} className={audioEnabled ? "animate-bounce" : ""} /> 
+            {audioEnabled ? 'Som Ativado' : 'Ativar Som'}
           </button>
+
           <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
             <button 
               onClick={() => setKitchenTab('active')}
@@ -1234,32 +1298,8 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
             </div>
           )}
 
-          <button 
-            onClick={() => {
-              if (audioRef.current) {
-                audioRef.current.play().catch(e => alert('Clique na página primeiro para permitir o som.'));
-              }
-            }}
-            className="text-[10px] uppercase tracking-widest text-stone-500 hover:text-white transition-colors"
-          >
-            Testar Som
-          </button>
-          <button 
-            onClick={() => setAudioEnabled(!audioEnabled)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl border transition-all",
-              audioEnabled 
-                ? "bg-emerald-500/10 border-emerald-500 text-emerald-500" 
-                : "bg-stone-800 border-stone-700 text-stone-500"
-            )}
-          >
-            <Bell size={18} className={audioEnabled ? "animate-bounce" : ""} />
-            <span className="text-xs font-bold uppercase tracking-wider">
-              Som: {audioEnabled ? 'Ligado' : 'Desligado'}
-            </span>
-          </button>
-          <div className="text-center border-l border-stone-800 pl-6">
-            <p className="text-2xl font-bold">{activeOrders.length}</p>
+          <div className="text-center border-l border-stone-800 pl-6 hidden sm:block">
+            <p className="text-2xl font-bold">{orders.filter(o => o.status !== 'paid' && o.status !== 'delivered').length}</p>
             <p className="text-[10px] uppercase tracking-widest text-stone-500">Ativos</p>
           </div>
         </div>
@@ -1679,9 +1719,22 @@ const CustomerMenu = () => {
                   >
                     <div className="flex justify-between items-center border-b border-stone-800 pb-2">
                       <h4 className="font-bold italic">Itens no Pedido</h4>
-                      <button onClick={() => setShowCartDetails(false)} className="text-stone-500 hover:text-white">
-                        <X size={16} />
-                      </button>
+                      <div className="flex items-center gap-4">
+                        <button 
+                          onClick={() => {
+                            if (confirm('Deseja limpar todo o carrinho?')) {
+                              setCart([]);
+                              setShowCartDetails(false);
+                            }
+                          }}
+                          className="text-[10px] uppercase tracking-widest text-red-500 font-bold hover:underline"
+                        >
+                          Limpar Tudo
+                        </button>
+                        <button onClick={() => setShowCartDetails(false)} className="text-stone-500 hover:text-white">
+                          <X size={16} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="bg-stone-800/50 p-4 rounded-2xl border border-stone-700/50">

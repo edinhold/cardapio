@@ -248,12 +248,24 @@ async function startServer() {
 
   // Orders
   app.get("/api/orders", (req, res) => {
-    const orders = db.prepare(`
+    const { status } = req.query;
+    let query = `
       SELECT o.*, t.number as table_number 
       FROM orders o 
       LEFT JOIN tables t ON o.table_id = t.id
-      ORDER BY o.created_at DESC
-    `).all();
+    `;
+    const params: any[] = [];
+
+    if (status === 'active') {
+      query += " WHERE o.status NOT IN ('paid', 'delivered')";
+    } else if (status) {
+      query += " WHERE o.status = ?";
+      params.push(status);
+    }
+
+    query += " ORDER BY o.created_at DESC";
+    
+    const orders = db.prepare(query).all(...params);
     
     const ordersWithItems = orders.map((order: any) => {
       const items = db.prepare(`
