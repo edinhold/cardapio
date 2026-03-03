@@ -356,6 +356,33 @@ async function startServer() {
   });
 
   // CRM / Sales Stats
+  app.get("/api/reports", (req, res) => {
+    const { period } = req.query; // 'day', 'week', 'month'
+    let dateFilter = "date('now')";
+    if (period === 'week') dateFilter = "date('now', '-7 days')";
+    if (period === 'month') dateFilter = "date('now', '-30 days')";
+
+    const itemsSold = db.prepare(`
+      SELECT i.name, SUM(oi.quantity) as quantity, SUM(oi.quantity * oi.price_at_time) as total
+      FROM order_items oi
+      JOIN items i ON oi.item_id = i.id
+      JOIN orders o ON oi.order_id = o.id
+      WHERE date(o.created_at) >= ${dateFilter}
+      AND o.status = 'paid'
+      GROUP BY i.id
+      ORDER BY quantity DESC
+    `).all();
+
+    const totalRevenue = db.prepare(`
+      SELECT SUM(total_price) as total
+      FROM orders
+      WHERE date(created_at) >= ${dateFilter}
+      AND status = 'paid'
+    `).get() as { total: number | null };
+
+    res.json({ itemsSold, totalRevenue: totalRevenue?.total || 0 });
+  });
+
   app.get("/api/stats", (req, res) => {
     const daily = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) = date('now')").get() as { total: number | null } | undefined;
     const weekly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-7 days')").get() as { total: number | null } | undefined;

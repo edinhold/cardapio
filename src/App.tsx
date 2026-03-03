@@ -17,6 +17,8 @@ import {
   Bell,
   Search,
   Info,
+  ChevronLeft,
+  ChevronRight,
   Coffee,
   Pizza,
   IceCream,
@@ -50,18 +52,20 @@ function cn(...inputs: ClassValue[]) {
 
 // --- Components ---
 
-const SidebarItem = ({ icon: Icon, label, active, onClick }: { icon: any, label: string, active: boolean, onClick: () => void }) => (
+const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }: { icon: any, label: string, active: boolean, onClick: () => void, collapsed?: boolean }) => (
   <button
     onClick={onClick}
+    title={collapsed ? label : undefined}
     className={cn(
       "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+      collapsed ? "justify-center px-2" : "px-4",
       active 
         ? "bg-stone-900 text-white shadow-lg shadow-stone-200" 
         : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
     )}
   >
-    <Icon size={20} />
-    <span className="font-medium">{label}</span>
+    <Icon size={20} className="shrink-0" />
+    {!collapsed && <span className="font-medium whitespace-nowrap overflow-hidden">{label}</span>}
   </button>
 );
 
@@ -139,6 +143,78 @@ const AdminDashboard = () => {
     };
   }, []);
 
+  const handlePrintReport = async (period: 'day' | 'week' | 'month') => {
+    try {
+      const res = await fetch(`/api/reports?period=${period}`);
+      const data = await res.json();
+      
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) return;
+      
+      const periodLabel = period === 'day' ? 'HOJE' : period === 'week' ? 'ÚLTIMA SEMANA' : 'ÚLTIMOS 30 DIAS';
+      
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Relatório de Vendas - ${periodLabel}</title>
+            <style>
+              body { font-family: monospace; padding: 20px; max-width: 400px; margin: 0 auto; color: #000; }
+              h2 { text-align: center; margin-bottom: 5px; font-size: 1.5em; }
+              p { text-align: center; margin: 2px 0; font-size: 0.8em; }
+              hr { border: none; border-top: 1px dashed #000; margin: 15px 0; }
+              table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+              th { text-align: left; border-bottom: 1px solid #000; padding-bottom: 5px; }
+              td { padding: 5px 0; }
+              .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 1.2em; margin-top: 10px; }
+              @media print { button { display: none; } }
+            </style>
+          </head>
+          <body>
+            <h2>SABOR CASEIRO</h2>
+            <p>RELATÓRIO DE VENDAS: ${periodLabel}</p>
+            <p>Gerado em: ${new Date().toLocaleString()}</p>
+            <hr/>
+            <table>
+              <thead>
+                <tr>
+                  <th style="text-align: left;">ITEM</th>
+                  <th style="text-align: center;">QTD</th>
+                  <th style="text-align: right;">TOTAL</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.itemsSold.map((item: any) => `
+                  <tr>
+                    <td>${item.name}</td>
+                    <td style="text-align: center;">${item.quantity}</td>
+                    <td style="text-align: right;">R$ ${item.total.toFixed(2)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <hr/>
+            <div class="total-row">
+              <span>TOTAL GERAL:</span>
+              <span>R$ ${data.totalRevenue.toFixed(2)}</span>
+            </div>
+            <p style="margin-top: 40px; border-top: 1px solid #ccc; padding-top: 10px;">Assinatura Responsável</p>
+            <p style="margin-top: 30px; font-size: 0.7em;">Fim do Relatório</p>
+            <script>
+              window.onload = () => {
+                window.print();
+                setTimeout(() => window.close(), 500);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    } catch (err) {
+      console.error('Report print error:', err);
+      alert('Erro ao gerar relatório.');
+    }
+  };
+
   if (!stats) return <div>Carregando...</div>;
 
   return (
@@ -147,6 +223,32 @@ const AdminDashboard = () => {
         <StatCard label="Vendas Hoje" value={`R$ ${stats.daily.toFixed(2)}`} />
         <StatCard label="Vendas Semana" value={`R$ ${stats.weekly.toFixed(2)}`} />
         <StatCard label="Vendas Mês" value={`R$ ${stats.monthly.toFixed(2)}`} />
+      </div>
+
+      <div className="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm">
+        <h3 className="text-xl font-bold mb-6 font-serif italic flex items-center gap-2">
+          <Printer size={20} /> Imprimir Relatórios de Vendas
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <button 
+            onClick={() => handlePrintReport('day')}
+            className="flex items-center justify-center gap-2 bg-stone-50 hover:bg-stone-100 p-4 rounded-2xl border border-stone-100 transition-all font-bold text-stone-700"
+          >
+            Relatório do Dia
+          </button>
+          <button 
+            onClick={() => handlePrintReport('week')}
+            className="flex items-center justify-center gap-2 bg-stone-50 hover:bg-stone-100 p-4 rounded-2xl border border-stone-100 transition-all font-bold text-stone-700"
+          >
+            Relatório da Semana
+          </button>
+          <button 
+            onClick={() => handlePrintReport('month')}
+            className="flex items-center justify-center gap-2 bg-stone-50 hover:bg-stone-100 p-4 rounded-2xl border border-stone-100 transition-all font-bold text-stone-700"
+          >
+            Relatório do Mês
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -612,6 +714,11 @@ const TableManagement = () => {
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [tableOrders, setTableOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [showReceipt, setShowReceipt] = useState<{
+    tableNumber: number;
+    orders: Order[];
+    total: number;
+  } | null>(null);
 
   const fetchTables = () => 
     fetch('/api/tables')
@@ -676,6 +783,14 @@ const TableManagement = () => {
     try {
       const res = await fetch(`/api/tables/${selectedTable.id}/close`, { method: 'POST' });
       if (!res.ok) throw new Error('Erro ao fechar conta');
+
+      if (tableOrders.length > 0) {
+        setShowReceipt({
+          tableNumber: selectedTable.number,
+          orders: [...tableOrders],
+          total: tableTotal
+        });
+      }
 
       setSelectedTable(null);
       fetchTables();
@@ -838,6 +953,57 @@ const TableManagement = () => {
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showReceipt && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+            <motion.div 
+              initial={{ opacity: 0, y: 50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 50 }}
+              className="bg-white w-full max-w-md rounded-[40px] p-10 shadow-2xl relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500" />
+              
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 size={32} />
+                </div>
+                <h3 className="text-2xl font-bold italic">Conta Fechada!</h3>
+                <p className="text-stone-500 text-sm">Resumo da Mesa {showReceipt.tableNumber}</p>
+              </div>
+
+              <div className="space-y-6 mb-8 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+                {showReceipt.orders.map(order => (
+                  <div key={order.id} className="border-b border-stone-100 pb-4 last:border-0">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-2">Pedido #{order.id}</p>
+                    <div className="space-y-2">
+                      {order.items.map((item, idx) => (
+                        <div key={idx} className="flex justify-between text-sm">
+                          <span className="text-stone-600">{item.quantity}x {item.name}</span>
+                          <span className="font-bold text-stone-900">R$ {(item.price_at_time * item.quantity).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-6 border-t-2 border-stone-900 flex justify-between items-center mb-8">
+                <span className="text-lg font-bold uppercase tracking-widest">Total Pago</span>
+                <span className="text-3xl font-bold text-stone-900">R$ {showReceipt.total.toFixed(2)}</span>
+              </div>
+
+              <button 
+                onClick={() => setShowReceipt(null)}
+                className="w-full bg-stone-900 text-white py-5 rounded-full font-bold text-lg hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
+              >
+                Concluir
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -964,26 +1130,37 @@ const AddonManagement = () => {
 
 const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons'>('dashboard');
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
     <div className="flex min-h-screen bg-stone-50">
-      <aside className="w-64 bg-white border-r border-stone-100 p-6 flex flex-col gap-8">
-        <div className="flex items-center gap-3 px-2">
-          <div className="bg-stone-900 p-2 rounded-lg text-white">
+      <aside className={cn(
+        "bg-white border-r border-stone-100 p-6 flex flex-col gap-8 transition-all duration-300 relative",
+        isCollapsed ? "w-24" : "w-64"
+      )}>
+        <button 
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="absolute -right-3 top-10 bg-white border border-stone-100 rounded-full p-1 shadow-sm hover:bg-stone-50 transition-colors z-20"
+        >
+          {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+
+        <div className={cn("flex items-center gap-3 px-2", isCollapsed && "justify-center")}>
+          <div className="bg-stone-900 p-2 rounded-lg text-white shrink-0">
             <TrendingUp size={20} />
           </div>
-          <h1 className="font-bold text-xl tracking-tight">SaborAdmin</h1>
+          {!isCollapsed && <h1 className="font-bold text-xl tracking-tight overflow-hidden whitespace-nowrap">SaborAdmin</h1>}
         </div>
         
         <nav className="flex flex-col gap-2">
-          <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <SidebarItem icon={UtensilsCrossed} label="Cardápio" active={activeTab === 'menu'} onClick={() => setActiveTab('menu')} />
-          <SidebarItem icon={PlusCircle} label="Adicionais" active={activeTab === 'addons'} onClick={() => setActiveTab('addons')} />
-          <SidebarItem icon={Users} label="Funcionários" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} />
-          <SidebarItem icon={TableIcon} label="Mesas" active={activeTab === 'tables'} onClick={() => setActiveTab('tables')} />
+          <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} collapsed={isCollapsed} />
+          <SidebarItem icon={UtensilsCrossed} label="Cardápio" active={activeTab === 'menu'} onClick={() => setActiveTab('menu')} collapsed={isCollapsed} />
+          <SidebarItem icon={PlusCircle} label="Adicionais" active={activeTab === 'addons'} onClick={() => setActiveTab('addons')} collapsed={isCollapsed} />
+          <SidebarItem icon={Users} label="Funcionários" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} collapsed={isCollapsed} />
+          <SidebarItem icon={TableIcon} label="Mesas" active={activeTab === 'tables'} onClick={() => setActiveTab('tables')} collapsed={isCollapsed} />
           
           <div className="my-4 border-t border-stone-100 pt-4">
-            <SidebarItem icon={ChefHat} label="Painel Cozinha" active={false} onClick={() => onViewChange('kitchen')} />
+            <SidebarItem icon={ChefHat} label="Painel Cozinha" active={false} onClick={() => onViewChange('kitchen')} collapsed={isCollapsed} />
           </div>
         </nav>
       </aside>
