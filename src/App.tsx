@@ -711,11 +711,11 @@ const EmployeeManagement = () => {
 const TableManagement = () => {
   const [tables, setTables] = useState<Table[]>([]);
   const [number, setNumber] = useState('');
-  const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+  const [selectedTable, setSelectedTable] = useState<Table | 'counter' | null>(null);
   const [tableOrders, setTableOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [showReceipt, setShowReceipt] = useState<{
-    tableNumber: number;
+    tableNumber: string | number;
     orders: Order[];
     total: number;
   } | null>(null);
@@ -738,24 +738,26 @@ const TableManagement = () => {
         if (selectedTableRef.current && (
           data.type === 'NEW_ORDER' || 
           data.type === 'ORDER_UPDATED' || 
-          (data.type === 'TABLE_UPDATED' && parseInt(data.id) === selectedTableRef.current.id)
+          (data.type === 'TABLE_UPDATED' && typeof selectedTableRef.current !== 'string' && parseInt(data.id) === selectedTableRef.current.id) ||
+          (data.type === 'ORDER_UPDATED' && selectedTableRef.current === 'counter' && data.id === 'counter')
         )) {
-          fetchTableOrders(selectedTableRef.current.id);
+          fetchTableOrders(selectedTableRef.current === 'counter' ? 'counter' : selectedTableRef.current.id);
         }
       }
     };
     return () => ws.close();
   }, []);
 
-  const selectedTableRef = useRef<Table | null>(null);
+  const selectedTableRef = useRef<Table | 'counter' | null>(null);
   useEffect(() => {
     selectedTableRef.current = selectedTable;
   }, [selectedTable]);
 
-  const fetchTableOrders = async (tableId: number) => {
+  const fetchTableOrders = async (tableId: number | 'counter') => {
     setLoadingOrders(true);
     try {
-      const res = await fetch(`/api/tables/${tableId}/orders`);
+      const url = tableId === 'counter' ? '/api/counter/orders' : `/api/tables/${tableId}/orders`;
+      const res = await fetch(url);
       const data = await res.json();
       setTableOrders(data);
     } catch (err) {
@@ -765,28 +767,32 @@ const TableManagement = () => {
     }
   };
 
-  const handleTableClick = async (table: Table) => {
+  const handleTableClick = async (table: Table | 'counter') => {
     setSelectedTable(table);
-    fetchTableOrders(table.id);
+    fetchTableOrders(table === 'counter' ? 'counter' : table.id);
   };
 
   const closeBill = async () => {
     if (!selectedTable) return;
     
+    const isCounter = selectedTable === 'counter';
+    const label = isCounter ? 'Balcão' : `Mesa ${selectedTable.number}`;
+
     const confirmClose = window.confirm(
       tableOrders.length > 0 
-        ? `Deseja fechar a conta da Mesa ${selectedTable.number}?` 
-        : `Deseja liberar a Mesa ${selectedTable.number}?`
+        ? `Deseja fechar a conta do ${label}?` 
+        : `Deseja liberar o ${label}?`
     );
     if (!confirmClose) return;
 
     try {
-      const res = await fetch(`/api/tables/${selectedTable.id}/close`, { method: 'POST' });
+      const url = isCounter ? '/api/counter/close' : `/api/tables/${selectedTable.id}/close`;
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) throw new Error('Erro ao fechar conta');
 
       if (tableOrders.length > 0) {
         setShowReceipt({
-          tableNumber: selectedTable.number,
+          tableNumber: isCounter ? 'Balcão' : selectedTable.number,
           orders: [...tableOrders],
           total: tableTotal
         });
@@ -838,6 +844,22 @@ const TableManagement = () => {
         </form>
       </div>
       <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
+        <button 
+          onClick={() => handleTableClick('counter')}
+          className={cn(
+            "bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
+            selectedTable === 'counter' && "border-stone-900 ring-1 ring-stone-900"
+          )}
+        >
+          <div className="bg-stone-900 p-3 rounded-full text-white mb-1">
+            <Coffee size={24} />
+          </div>
+          <span className="font-bold text-xl">Balcão</span>
+          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
+            Pedidos Diretos
+          </span>
+        </button>
+
         {tables.map(table => (
           <button 
             key={table.id} 
@@ -872,7 +894,9 @@ const TableManagement = () => {
               className="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
             >
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold italic">Mesa {selectedTable.number} - Extrato</h3>
+                <h3 className="text-2xl font-bold italic">
+                  {selectedTable === 'counter' ? 'Balcão' : `Mesa ${selectedTable.number}`} - Extrato
+                </h3>
                 <button onClick={() => setSelectedTable(null)} className="text-stone-400 hover:text-stone-900"><X /></button>
               </div>
 
@@ -970,7 +994,7 @@ const TableManagement = () => {
                   <CheckCircle2 size={32} />
                 </div>
                 <h3 className="text-2xl font-bold italic">Conta Fechada!</h3>
-                <p className="text-stone-500 text-sm">Resumo da Mesa {showReceipt.tableNumber}</p>
+                <p className="text-stone-500 text-sm">Resumo: {showReceipt.tableNumber === 'Balcão' ? 'Balcão' : `Mesa ${showReceipt.tableNumber}`}</p>
               </div>
 
               <div className="space-y-6 mb-8 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">

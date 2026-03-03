@@ -213,6 +213,47 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/counter/close", (req, res) => {
+    const transaction = db.transaction(() => {
+      db.prepare("UPDATE orders SET status = 'paid' WHERE table_id IS NULL AND status != 'paid'").run();
+    });
+    transaction();
+    broadcast({ type: 'ORDER_UPDATED', id: 'counter', status: 'paid' });
+    res.json({ success: true });
+  });
+
+  app.get("/api/counter/orders", (req, res) => {
+    const orders = db.prepare(`
+      SELECT o.*, 'Balcão' as table_number 
+      FROM orders o 
+      WHERE o.table_id IS NULL AND o.status != 'paid'
+      ORDER BY o.created_at DESC
+    `).all();
+    
+    const ordersWithItems = orders.map((order: any) => {
+      const items = db.prepare(`
+        SELECT oi.*, i.name 
+        FROM order_items oi 
+        JOIN items i ON oi.item_id = i.id 
+        WHERE oi.order_id = ?
+      `).all(order.id);
+
+      const itemsWithAddons = items.map((item: any) => {
+        const addons = db.prepare(`
+          SELECT oia.*, a.name 
+          FROM order_item_addons oia 
+          JOIN addons a ON oia.addon_id = a.id 
+          WHERE oia.order_item_id = ?
+        `).all(item.id);
+        return { ...item, addons };
+      });
+
+      return { ...order, items: itemsWithAddons };
+    });
+    
+    res.json(ordersWithItems);
+  });
+
   app.get("/api/tables/:id/orders", (req, res) => {
     const orders = db.prepare(`
       SELECT o.*, t.number as table_number 
