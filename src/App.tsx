@@ -1282,65 +1282,66 @@ const AddonManagement = () => {
         </button>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-1 bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-fit">
-        <h3 className="text-xl font-bold mb-6">{editingAddon ? 'Editar Adicional' : 'Cadastrar Adicional'}</h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <input 
-            placeholder="Nome do Adicional (ex: Bacon, Queijo Extra)" 
-            className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
-            value={name} onChange={e => setName(e.target.value)} required
-          />
-          <input 
-            type="number" step="0.01" placeholder="Preço" 
-            className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
-            value={price} onChange={e => setPrice(e.target.value)} required
-          />
-          <div className="flex gap-2">
-            <button type="submit" className="flex-1 bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-stone-800 transition-colors">
-              {editingAddon ? 'Salvar' : 'Adicionar'}
-            </button>
-            {editingAddon && (
-              <button 
-                type="button" 
-                onClick={cancelEdit}
-                className="px-6 py-4 rounded-xl border border-stone-200 font-bold hover:bg-stone-50 transition-colors"
-              >
-                Cancelar
+        <div className="lg:col-span-1 bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-fit">
+          <h3 className="text-xl font-bold mb-6">{editingAddon ? 'Editar Adicional' : 'Cadastrar Adicional'}</h3>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <input 
+              placeholder="Nome do Adicional (ex: Bacon, Queijo Extra)" 
+              className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
+              value={name} onChange={e => setName(e.target.value)} required
+            />
+            <input 
+              type="number" step="0.01" placeholder="Preço" 
+              className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
+              value={price} onChange={e => setPrice(e.target.value)} required
+            />
+            <div className="flex gap-2">
+              <button type="submit" className="flex-1 bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-stone-800 transition-colors">
+                {editingAddon ? 'Salvar' : 'Adicionar'}
               </button>
-            )}
-          </div>
-        </form>
-      </div>
-      <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-        {addons.map(addon => (
-          <div 
-            key={addon.id} 
-            onClick={() => handleEdit(addon)}
-            className={cn(
-              "bg-white p-6 rounded-2xl border transition-all flex items-center justify-between cursor-pointer group",
-              editingAddon?.id === addon.id ? "border-stone-900 ring-1 ring-stone-900" : "border-stone-100 hover:border-stone-300"
-            )}
-          >
-            <div className="flex items-center gap-4">
-              <div className={cn(
-                "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                editingAddon?.id === addon.id ? "bg-stone-900 text-white" : "bg-stone-100 text-stone-400 group-hover:bg-stone-200"
-              )}>
-                <PlusCircle size={20} />
-              </div>
-              <div>
-                <h4 className="font-bold">{addon.name}</h4>
-                <p className="text-stone-500 text-sm">R$ {addon.price.toFixed(2)}</p>
-              </div>
+              {editingAddon && (
+                <button 
+                  type="button" 
+                  onClick={cancelEdit}
+                  className="px-6 py-4 rounded-xl border border-stone-200 font-bold hover:bg-stone-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+              )}
             </div>
-            <button 
-              onClick={(e) => deleteAddon(e, addon.id)} 
-              className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+          </form>
+        </div>
+        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {addons.map(addon => (
+            <div 
+              key={addon.id} 
+              onClick={() => handleEdit(addon)}
+              className={cn(
+                "bg-white p-6 rounded-2xl border transition-all flex items-center justify-between cursor-pointer group",
+                editingAddon?.id === addon.id ? "border-stone-900 ring-1 ring-stone-900" : "border-stone-100 hover:border-stone-300"
+              )}
             >
-              <Trash2 size={18} />
-            </button>
-          </div>
-        ))}
+              <div className="flex items-center gap-4">
+                <div className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                  editingAddon?.id === addon.id ? "bg-stone-900 text-white" : "bg-stone-100 text-stone-400 group-hover:bg-stone-200"
+                )}>
+                  <PlusCircle size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold">{addon.name}</h4>
+                  <p className="text-stone-500 text-sm">R$ {addon.price.toFixed(2)}</p>
+                </div>
+              </div>
+              <button 
+                onClick={(e) => deleteAddon(e, addon.id)} 
+                className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
