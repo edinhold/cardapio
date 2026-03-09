@@ -44,7 +44,8 @@ export interface Order {
   table_id: number;
   table_number?: number;
   total_price: number;
-  status: 'pending' | 'preparing' | 'ready' | 'delivered' | 'paid';
+  status: 'pending' | 'preparing' | 'ready' | 'delivered' | 'paid' | 'canceled';
+  type: 'table' | 'counter' | 'delivery';
   created_at: string;
   items: OrderItem[];
 }

@@ -28,7 +28,9 @@ import {
   Fish,
   Beef,
   Apple,
-  Cake
+  Cake,
+  Truck,
+  XCircle
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -83,24 +85,42 @@ const AdminDashboard = () => {
   const [stats, setStats] = useState<SalesStats | null>(null);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
 
+  const fetchStats = () => {
+    fetch('/api/stats')
+      .then(res => res.json())
+      .then(setStats)
+      .catch(err => {
+        console.error('Stats fetch error:', err);
+        alert('Erro ao carregar estatísticas.');
+      });
+  };
+
+  const fetchOrders = () => {
+    fetch('/api/orders')
+      .then(res => res.json())
+      .then(data => setRecentOrders(data.slice(0, 5)))
+      .catch(err => console.error('Orders fetch error:', err));
+  };
+
+  const handleSystemReset = async () => {
+    if (!confirm('ATENÇÃO: Isso apagará TODOS os pedidos e resetará o status das mesas. Esta ação não pode ser desfeita. Deseja continuar?')) return;
+    
+    try {
+      const res = await fetch('/api/system/reset', { method: 'POST' });
+      if (res.ok) {
+        alert('Sistema limpo com sucesso!');
+        fetchStats();
+        fetchOrders();
+      } else {
+        throw new Error('Falha ao resetar sistema');
+      }
+    } catch (err) {
+      console.error('Reset error:', err);
+      alert('Erro ao limpar sistema.');
+    }
+  };
+
   useEffect(() => {
-    const fetchStats = () => {
-      fetch('/api/stats')
-        .then(res => res.json())
-        .then(setStats)
-        .catch(err => {
-          console.error('Stats fetch error:', err);
-          alert('Erro ao carregar estatísticas.');
-        });
-    };
-
-    const fetchOrders = () => {
-      fetch('/api/orders')
-        .then(res => res.json())
-        .then(data => setRecentOrders(data.slice(0, 5)))
-        .catch(err => console.error('Orders fetch error:', err));
-    };
-
     fetchStats();
     fetchOrders();
 
@@ -116,12 +136,9 @@ const AdminDashboard = () => {
         try {
           const data = JSON.parse(event.data);
           console.log('Admin: Mensagem recebida:', data.type);
-          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
+          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED' || data.type === 'SYSTEM_RESET' || data.type === 'MENU_CLEARED') {
             fetchOrders();
-            // Also refresh stats on new order
-            if (data.type === 'NEW_ORDER') {
-              fetch('/api/stats').then(res => res.json()).then(setStats);
-            }
+            fetchStats();
           }
         } catch (e) { console.error('WS error:', e); }
       };
@@ -215,6 +232,21 @@ const AdminDashboard = () => {
     }
   };
 
+  const cancelOrder = async (id: number) => {
+    if (!confirm('Tem certeza que deseja cancelar este pedido?')) return;
+    try {
+      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Erro ao cancelar pedido');
+      fetch('/api/orders')
+        .then(res => res.json())
+        .then(data => setRecentOrders(data.slice(0, 5)));
+      fetch('/api/stats').then(res => res.json()).then(setStats);
+    } catch (err) {
+      console.error('Cancel order error:', err);
+      alert('Erro ao cancelar pedido.');
+    }
+  };
+
   if (!stats) return <div>Carregando...</div>;
 
   return (
@@ -247,6 +279,12 @@ const AdminDashboard = () => {
             className="flex items-center justify-center gap-2 bg-stone-50 hover:bg-stone-100 p-4 rounded-2xl border border-stone-100 transition-all font-bold text-stone-700"
           >
             Relatório do Mês
+          </button>
+          <button 
+            onClick={handleSystemReset}
+            className="flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 p-4 rounded-2xl border border-red-100 transition-all font-bold text-red-600"
+          >
+            Limpar Sistema
           </button>
         </div>
       </div>
@@ -282,16 +320,27 @@ const AdminDashboard = () => {
                   <p className="font-bold text-stone-900">#{order.id} - {order.table_number ? `Mesa ${order.table_number}` : 'Balcão'}</p>
                   <p className="text-xs text-stone-400">{new Date(order.created_at).toLocaleTimeString()}</p>
                 </div>
-                <div className="text-right">
+                <div className="text-right flex flex-col items-end gap-1">
                   <p className="font-bold text-stone-900">R$ {order.total_price.toFixed(2)}</p>
-                  <span className={cn(
-                    "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
-                    order.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
-                    order.status === 'preparing' ? "bg-blue-100 text-blue-700" :
-                    "bg-emerald-100 text-emerald-700"
-                  )}>
-                    {order.status}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {order.status !== 'paid' && order.status !== 'canceled' && (
+                      <button 
+                        onClick={() => cancelOrder(order.id)}
+                        className="text-[10px] text-red-500 hover:underline"
+                      >
+                        Cancelar
+                      </button>
+                    )}
+                    <span className={cn(
+                      "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                      order.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
+                      order.status === 'preparing' ? "bg-blue-100 text-blue-700" :
+                      order.status === 'canceled' ? "bg-red-100 text-red-700" :
+                      "bg-emerald-100 text-emerald-700"
+                    )}>
+                      {order.status}
+                    </span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -450,16 +499,41 @@ const MenuManagement = () => {
     }
   };
 
+  const handleClearMenu = async () => {
+    if (!confirm('ATENÇÃO: Isso apagará TODOS os produtos e adicionais cadastrados, além de todos os pedidos existentes. Esta ação não pode ser desfeita. Deseja continuar?')) return;
+    
+    try {
+      const res = await fetch('/api/system/clear-menu', { method: 'POST' });
+      if (res.ok) {
+        alert('Cardápio limpo com sucesso!');
+        fetchItems();
+      } else {
+        throw new Error('Falha ao limpar cardápio');
+      }
+    } catch (err) {
+      console.error('Clear menu error:', err);
+      alert('Erro ao limpar cardápio.');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold font-serif italic">Gestão de Cardápio</h2>
-        <button 
-          onClick={() => handleOpenForm()}
-          className="bg-stone-900 text-white px-6 py-2 rounded-full flex items-center gap-2 hover:bg-stone-800 transition-colors"
-        >
-          <Plus size={18} /> Novo Item
-        </button>
+        <div className="flex gap-3">
+          <button 
+            onClick={handleClearMenu}
+            className="bg-red-50 text-red-600 px-6 py-2 rounded-full flex items-center gap-2 hover:bg-red-100 transition-colors text-sm font-bold border border-red-100"
+          >
+            <Trash2 size={18} /> Apagar Tudo
+          </button>
+          <button 
+            onClick={() => handleOpenForm()}
+            className="bg-stone-900 text-white px-6 py-2 rounded-full flex items-center gap-2 hover:bg-stone-800 transition-colors"
+          >
+            <Plus size={18} /> Novo Item
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -719,6 +793,7 @@ const TableManagement = () => {
     orders: Order[];
     total: number;
   } | null>(null);
+  const [showMenuModal, setShowMenuModal] = useState<number | null>(null);
 
   const fetchTables = () => 
     fetch('/api/tables')
@@ -778,7 +853,7 @@ const TableManagement = () => {
     const isCounter = selectedTable === 'counter';
     const label = isCounter ? 'Balcão' : `Mesa ${selectedTable.number}`;
 
-    const confirmClose = window.confirm(
+    const confirmClose = confirm(
       tableOrders.length > 0 
         ? `Deseja fechar a conta do ${label}?` 
         : `Deseja liberar o ${label}?`
@@ -787,8 +862,12 @@ const TableManagement = () => {
 
     try {
       const url = isCounter ? '/api/counter/close' : `/api/tables/${selectedTable.id}/close`;
+      console.log(`Closing bill for ${label} via ${url}`);
       const res = await fetch(url, { method: 'POST' });
-      if (!res.ok) throw new Error('Erro ao fechar conta');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao fechar conta');
+      }
 
       if (tableOrders.length > 0) {
         setShowReceipt({
@@ -800,9 +879,57 @@ const TableManagement = () => {
 
       setSelectedTable(null);
       fetchTables();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error closing bill:', err);
-      alert('Erro ao fechar conta. Por favor, tente novamente.');
+      alert(`Erro ao fechar conta: ${err.message}`);
+    }
+  };
+
+  const cancelOrder = async (id: number) => {
+    if (!confirm('Tem certeza que deseja cancelar este pedido?')) return;
+    try {
+      console.log(`Canceling order #${id}`);
+      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao cancelar pedido');
+      }
+      
+      const tableId = selectedTable === 'counter' ? 'counter' : selectedTable!.id;
+      fetchTableOrders(tableId);
+      fetchTables();
+    } catch (err: any) {
+      console.error('Cancel order error:', err);
+      alert(`Erro ao cancelar pedido: ${err.message}`);
+    }
+  };
+
+  const closeOrder = async (order: Order) => {
+    if (!confirm(`Fechar pedido #${order.id}?`)) return;
+    try {
+      console.log(`Closing individual order #${order.id}`);
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'paid' })
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao fechar pedido');
+      }
+      
+      setShowReceipt({
+        tableNumber: selectedTable === 'counter' ? 'Balcão' : selectedTable!.number,
+        orders: [order],
+        total: order.total_price
+      });
+      
+      const tableId = selectedTable === 'counter' ? 'counter' : selectedTable!.id;
+      fetchTableOrders(tableId);
+      fetchTables();
+    } catch (err: any) {
+      console.error('Error closing order:', err);
+      alert(`Erro ao fechar pedido: ${err.message}`);
     }
   };
 
@@ -925,7 +1052,25 @@ const TableManagement = () => {
                                 {order.status}
                               </span>
                             </div>
-                            <span className="text-stone-500 text-xs">{new Date(order.created_at).toLocaleTimeString()}</span>
+                            <div className="flex items-center gap-3">
+                              {order.status !== 'paid' && order.status !== 'canceled' && (
+                                <div className="flex items-center gap-2">
+                                  <button 
+                                    onClick={() => closeOrder(order)}
+                                    className="text-[10px] text-emerald-600 hover:underline flex items-center gap-1"
+                                  >
+                                    <CheckCircle2 size={10} /> Fechar
+                                  </button>
+                                  <button 
+                                    onClick={() => cancelOrder(order.id)}
+                                    className="text-[10px] text-red-500 hover:underline flex items-center gap-1"
+                                  >
+                                    <Trash2 size={10} /> Cancelar
+                                  </button>
+                                </div>
+                              )}
+                              <span className="text-stone-500 text-xs">{new Date(order.created_at).toLocaleTimeString()}</span>
+                            </div>
                           </div>
                           <div className="space-y-2">
                             {order.items.map((item, idx) => (
@@ -952,25 +1097,33 @@ const TableManagement = () => {
                     <span className="text-2xl font-bold text-stone-900">R$ {tableTotal.toFixed(2)}</span>
                   </div>
 
-                  <button 
-                    onClick={closeBill}
-                    className={cn(
-                      "w-full py-5 rounded-full font-bold text-lg transition-all shadow-xl flex items-center justify-center gap-2",
-                      tableOrders.length > 0 
-                        ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
-                        : "bg-stone-200 text-stone-600 hover:bg-stone-300 shadow-stone-100"
-                    )}
-                  >
-                    {tableOrders.length > 0 ? (
-                      <>
-                        <CheckCircle2 size={24} /> Fechar Conta e Liberar Mesa
-                      </>
-                    ) : (
-                      <>
-                        <X size={24} /> Liberar Mesa Ocupada
-                      </>
-                    )}
-                  </button>
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => setShowMenuModal(selectedTable === 'counter' ? -1 : selectedTable!.id)}
+                      className="flex-1 bg-stone-100 text-stone-900 py-5 rounded-full font-bold text-lg hover:bg-stone-200 transition-all flex items-center justify-center gap-2"
+                    >
+                      <PlusCircle size={24} /> Novo Pedido
+                    </button>
+                    <button 
+                      onClick={closeBill}
+                      className={cn(
+                        "flex-[2] py-5 rounded-full font-bold text-lg transition-all shadow-xl flex items-center justify-center gap-2",
+                        tableOrders.length > 0 
+                          ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
+                          : "bg-stone-200 text-stone-600 hover:bg-stone-300 shadow-stone-100"
+                      )}
+                    >
+                      {tableOrders.length > 0 ? (
+                        <>
+                          <CheckCircle2 size={24} /> Fechar Conta
+                        </>
+                      ) : (
+                        <>
+                          <X size={24} /> Liberar Mesa
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               )}
             </motion.div>
@@ -1025,6 +1178,20 @@ const TableManagement = () => {
                 Concluir
               </button>
             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showMenuModal !== null && (
+          <div className="fixed inset-0 z-[100] bg-white overflow-y-auto">
+            <CustomerMenu 
+              initialTableId={showMenuModal} 
+              onClose={() => {
+                setShowMenuModal(null);
+                if (selectedTable) fetchTableOrders(selectedTable === 'counter' ? 'counter' : selectedTable.id);
+              }} 
+            />
           </div>
         )}
       </AnimatePresence>
@@ -1086,8 +1253,35 @@ const AddonManagement = () => {
     }
   };
 
+  const handleClearMenu = async () => {
+    if (!confirm('ATENÇÃO: Isso apagará TODOS os produtos e adicionais cadastrados, além de todos os pedidos existentes. Esta ação não pode ser desfeita. Deseja continuar?')) return;
+    
+    try {
+      const res = await fetch('/api/system/clear-menu', { method: 'POST' });
+      if (res.ok) {
+        alert('Cardápio limpo com sucesso!');
+        fetchAddons();
+      } else {
+        throw new Error('Falha ao limpar cardápio');
+      }
+    } catch (err) {
+      console.error('Clear menu error:', err);
+      alert('Erro ao limpar cardápio.');
+    }
+  };
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold font-serif italic">Gestão de Adicionais</h2>
+        <button 
+          onClick={handleClearMenu}
+          className="bg-red-50 text-red-600 px-6 py-2 rounded-full flex items-center gap-2 hover:bg-red-100 transition-colors text-sm font-bold border border-red-100"
+        >
+          <Trash2 size={18} /> Apagar Tudo
+        </button>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <div className="lg:col-span-1 bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-fit">
         <h3 className="text-xl font-bold mb-6">{editingAddon ? 'Editar Adicional' : 'Cadastrar Adicional'}</h3>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -1152,8 +1346,223 @@ const AddonManagement = () => {
   );
 };
 
+const DeliveryManagement = () => {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showMenuModal, setShowMenuModal] = useState(false);
+  const [showReceipt, setShowReceipt] = useState<{
+    orders: Order[];
+    total: number;
+  } | null>(null);
+
+  const fetchOrders = () => {
+    setLoading(true);
+    fetch('/api/delivery/orders')
+      .then(res => res.json())
+      .then(setOrders)
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchOrders();
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
+        fetchOrders();
+      }
+    };
+    return () => ws.close();
+  }, []);
+
+  const closeAll = async () => {
+    if (orders.length === 0) return;
+    if (!confirm('Deseja fechar todas as contas de delivery?')) return;
+    
+    try {
+      const total = orders.reduce((sum, o) => sum + o.total_price, 0);
+      const ordersToReceipt = [...orders];
+
+      const res = await fetch('/api/delivery/close', { method: 'POST' });
+      if (!res.ok) throw new Error('Erro ao fechar contas');
+      
+      setShowReceipt({ orders: ordersToReceipt, total });
+      fetchOrders();
+    } catch (err: any) {
+      console.error('Error closing all delivery:', err);
+      alert(`Erro: ${err.message}`);
+    }
+  };
+
+  const cancelOrder = async (id: number) => {
+    if (!confirm('Cancelar este pedido de delivery?')) return;
+    try {
+      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Erro ao cancelar pedido');
+      fetchOrders();
+    } catch (err: any) {
+      console.error('Error canceling delivery:', err);
+      alert(`Erro: ${err.message}`);
+    }
+  };
+
+  const closeOrder = async (order: Order) => {
+    if (!confirm(`Fechar pedido #${order.id}?`)) return;
+    try {
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'paid' })
+      });
+      if (!res.ok) throw new Error('Erro ao fechar pedido');
+      
+      setShowReceipt({ orders: [order], total: order.total_price });
+      fetchOrders();
+    } catch (err: any) {
+      console.error('Error closing delivery order:', err);
+      alert(`Erro: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <div className="bg-stone-900 p-3 rounded-2xl text-white">
+            <Truck size={24} />
+          </div>
+          <div>
+            <h3 className="text-2xl font-bold">Gestão de Delivery</h3>
+            <p className="text-stone-500 text-sm">{orders.length} pedidos ativos</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button 
+            onClick={() => setShowMenuModal(true)}
+            className="bg-stone-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-stone-800 transition-colors"
+          >
+            <Plus size={20} /> Novo Pedido Delivery
+          </button>
+          <button 
+            onClick={closeAll}
+            disabled={orders.length === 0}
+            className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-700 transition-colors disabled:opacity-50"
+          >
+            <CheckCircle2 size={20} /> Fechar Todos
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {loading ? (
+          <div className="col-span-full py-20 text-center text-stone-400">Carregando...</div>
+        ) : orders.length === 0 ? (
+          <div className="col-span-full py-20 text-center text-stone-400 bg-white rounded-3xl border border-dashed border-stone-200">
+            Nenhum pedido de delivery ativo.
+          </div>
+        ) : (
+          orders.map(order => (
+            <div key={order.id} className="bg-white p-6 rounded-3xl border border-stone-100 shadow-sm space-y-4">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400">Pedido #{order.id}</p>
+                  <p className="text-xs text-stone-500">{new Date(order.created_at).toLocaleTimeString()}</p>
+                </div>
+                <span className={cn(
+                  "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                  order.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
+                  order.status === 'preparing' ? "bg-blue-100 text-blue-700" :
+                  "bg-emerald-100 text-emerald-700"
+                )}>
+                  {order.status}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {order.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="text-stone-600">{item.quantity}x {item.name}</span>
+                    <span className="font-bold">R$ {(item.price_at_time * item.quantity).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-4 border-t border-stone-100 flex justify-between items-center">
+                <span className="font-bold text-lg">R$ {order.total_price.toFixed(2)}</span>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => closeOrder(order)}
+                    className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 p-2 rounded-lg transition-colors"
+                    title="Fechar Pedido"
+                  >
+                    <CheckCircle2 size={18} />
+                  </button>
+                  <button 
+                    onClick={() => cancelOrder(order.id)}
+                    className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                    title="Cancelar Pedido"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <AnimatePresence>
+        {showMenuModal && (
+          <div className="fixed inset-0 z-[100] bg-white overflow-y-auto">
+            <CustomerMenu 
+              initialTableId={-2} 
+              onClose={() => {
+                setShowMenuModal(false);
+                fetchOrders();
+              }} 
+            />
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showReceipt && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+            <motion.div 
+              initial={{ opacity: 0, y: 50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 50 }}
+              className="bg-white w-full max-w-md rounded-[40px] p-10 shadow-2xl relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500" />
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 size={32} />
+                </div>
+                <h3 className="text-2xl font-bold italic">Delivery Fechado!</h3>
+                <p className="text-stone-500 text-sm">Resumo de Vendas Delivery</p>
+              </div>
+              <div className="pt-6 border-t-2 border-stone-900 flex justify-between items-center mb-8">
+                <span className="text-lg font-bold uppercase tracking-widest">Total Pago</span>
+                <span className="text-3xl font-bold text-stone-900">R$ {showReceipt.total.toFixed(2)}</span>
+              </div>
+              <button 
+                onClick={() => setShowReceipt(null)}
+                className="w-full bg-stone-900 text-white py-5 rounded-full font-bold text-lg hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
+              >
+                Concluir
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons' | 'delivery'>('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
@@ -1182,6 +1591,7 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
           <SidebarItem icon={PlusCircle} label="Adicionais" active={activeTab === 'addons'} onClick={() => setActiveTab('addons')} collapsed={isCollapsed} />
           <SidebarItem icon={Users} label="Funcionários" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} collapsed={isCollapsed} />
           <SidebarItem icon={TableIcon} label="Mesas" active={activeTab === 'tables'} onClick={() => setActiveTab('tables')} collapsed={isCollapsed} />
+          <SidebarItem icon={Truck} label="Delivery" active={activeTab === 'delivery'} onClick={() => setActiveTab('delivery')} collapsed={isCollapsed} />
           
           <div className="my-4 border-t border-stone-100 pt-4">
             <SidebarItem icon={ChefHat} label="Painel Cozinha" active={false} onClick={() => onViewChange('kitchen')} collapsed={isCollapsed} />
@@ -1198,6 +1608,7 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
               {activeTab === 'addons' && 'Adicionais'}
               {activeTab === 'employees' && 'Equipe'}
               {activeTab === 'tables' && 'Salão'}
+              {activeTab === 'delivery' && 'Delivery'}
             </h2>
             <p className="text-stone-500">Bem-vindo ao painel de controle.</p>
           </div>
@@ -1215,10 +1626,145 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
         {activeTab === 'addons' && <AddonManagement />}
         {activeTab === 'employees' && <EmployeeManagement />}
         {activeTab === 'tables' && <TableManagement />}
+        {activeTab === 'delivery' && <DeliveryManagement />}
       </main>
     </div>
   );
 };
+
+const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder, handlePrint }: { 
+  order: Order, 
+  kitchenTab: 'active' | 'history', 
+  updateStatus: (id: number, status: string) => void, 
+  deleteOrder: (id: number) => void, 
+  handlePrint: (order: Order) => void 
+}) => (
+  <motion.div 
+    layout
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, scale: 0.9 }}
+    className={cn(
+      "bg-stone-800 rounded-3xl p-6 border flex flex-col h-full transition-colors",
+      order.status === 'ready' ? "border-blue-500/30" : "border-stone-700",
+      (order.status === 'paid' || order.status === 'delivered') && "opacity-75"
+    )}
+  >
+    <div className="flex justify-between items-start mb-6">
+      <div>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
+          {order.type === 'delivery' ? 'Delivery' : (order.table_number ? 'Mesa' : 'Local')}
+        </span>
+        <p className={cn(
+          "text-3xl font-bold",
+          order.type === 'delivery' ? "text-emerald-400" : (!order.table_number && "text-blue-400")
+        )}>
+          {order.type === 'delivery' ? 'Entrega' : (order.table_number || 'Balcão')}
+        </p>
+      </div>
+      <div className="text-right">
+        <div className="flex items-center justify-end gap-2 mb-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Pedido</span>
+          {kitchenTab === 'history' && (
+            <button 
+              onClick={() => deleteOrder(order.id)}
+              className="text-red-500 hover:text-red-400 transition-colors p-1"
+              title="Excluir Pedido"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+        <div className="flex flex-col items-end">
+          <span className="text-xs text-stone-400 font-mono">
+            {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <p className="text-lg font-mono">#{order.id}</p>
+          {kitchenTab === 'history' && (
+            <span className="text-[10px] text-stone-500">
+              {new Date(order.created_at).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+
+    <div className="flex-1 space-y-3 mb-8">
+      {order.items.map((item, idx) => (
+        <div key={idx} className="border-b border-stone-700/50 pb-2 last:border-0">
+          <div className="flex justify-between items-start">
+            <div className="flex-1">
+              <p className="font-bold text-stone-200">{item.name}</p>
+              {item.observation && (
+                <div className="flex items-center gap-1.5 mt-1 bg-yellow-500/10 px-2 py-1 rounded-lg w-fit">
+                  <Info size={12} className="text-yellow-500" />
+                  <p className="text-[11px] text-yellow-500 font-medium italic">{item.observation}</p>
+                </div>
+              )}
+              {item.addons && item.addons.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {item.addons.map((a, aidx) => (
+                    <span key={aidx} className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-tighter">
+                      + {a.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="bg-stone-700 text-white px-2.5 py-1 rounded-xl text-xs font-black ml-4">
+              {item.quantity}x
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        {order.status === 'pending' && (
+          <button 
+            onClick={() => updateStatus(order.id, 'preparing')}
+            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
+          >
+            <ChefHat size={20} /> Preparar
+          </button>
+        )}
+        {order.status === 'preparing' && (
+          <button 
+            onClick={() => updateStatus(order.id, 'ready')}
+            className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
+          >
+            <CheckCircle2 size={20} /> Pronto
+          </button>
+        )}
+        {order.status === 'ready' && (
+          <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
+            Pronto
+          </div>
+        )}
+        {(order.status === 'delivered' || order.status === 'paid') && (
+          <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
+            Entregue
+          </div>
+        )}
+        <button 
+          onClick={() => handlePrint(order)}
+          className="bg-stone-700 hover:bg-stone-600 p-3 rounded-xl transition-colors"
+        >
+          <Printer size={20} />
+        </button>
+      </div>
+      {order.status === 'ready' && (
+        <button 
+          onClick={() => updateStatus(order.id, 'delivered')}
+          className="w-full bg-stone-100 text-stone-900 py-3 rounded-xl font-bold hover:bg-white transition-colors uppercase text-xs tracking-widest"
+        >
+          Entregar Pedido
+        </button>
+      )}
+    </div>
+  </motion.div>
+);
 
 const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1245,7 +1791,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         if (kitchenTab === 'history') {
           // Additional client-side filtering for history if needed
           const filtered = data.filter((o: Order) => {
-            if (o.status !== 'paid' && o.status !== 'delivered') return false;
+            if (o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled') return false;
             const orderDate = new Date(o.created_at);
             const now = new Date();
             if (historyFilter === 'day') {
@@ -1286,7 +1832,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         try {
           const data = JSON.parse(event.data);
           console.log('Mensagem recebida:', data.type);
-          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
+          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED' || data.type === 'SYSTEM_RESET' || data.type === 'MENU_CLEARED') {
             fetchOrders();
             
             if (data.type === 'NEW_ORDER') {
@@ -1366,10 +1912,10 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     printWindow.document.close();
   };
 
-  const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'delivered');
+  const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled');
   
   const historyOrders = orders.filter(o => {
-    if (o.status !== 'paid' && o.status !== 'delivered') return false;
+    if (o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled') return false;
     const orderDate = new Date(o.created_at);
     const now = new Date();
     if (historyFilter === 'day') {
@@ -1382,6 +1928,12 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   });
 
   const displayOrders = kitchenTab === 'active' ? activeOrders : historyOrders;
+
+  const groupedOrders = {
+    table: displayOrders.filter(o => o.type === 'table'),
+    counter: displayOrders.filter(o => o.type === 'counter'),
+    delivery: displayOrders.filter(o => o.type === 'delivery'),
+  };
 
   return (
     <div className="min-h-screen bg-stone-900 text-white p-8 relative overflow-hidden">
@@ -1506,146 +2058,85 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        <AnimatePresence mode="popLayout">
-          {displayOrders.map(order => (
-            <motion.div 
-              key={order.id}
-              layout
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className={cn(
-                "bg-stone-800 rounded-3xl p-6 border flex flex-col h-full transition-colors",
-                order.status === 'ready' ? "border-blue-500/30" : "border-stone-700",
-                (order.status === 'paid' || order.status === 'delivered') && "opacity-75"
-              )}
-            >
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
-                    {order.table_number ? 'Mesa' : 'Local'}
-                  </span>
-                  <p className={cn(
-                    "text-3xl font-bold",
-                    !order.table_number && "text-emerald-400"
-                  )}>
-                    {order.table_number || 'Balcão'}
-                  </p>
+      <div className="space-y-12">
+        {kitchenTab === 'active' ? (
+          <>
+            {groupedOrders.table.length > 0 && (
+              <section className="space-y-6">
+                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
+                  <TableIcon size={24} className="text-stone-500" />
+                  <h2 className="text-xl font-bold uppercase tracking-widest">Mesas</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.table.length}</span>
                 </div>
-                <div className="text-right">
-                  <div className="flex items-center justify-end gap-2 mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Pedido</span>
-                    {kitchenTab === 'history' && (
-                      <button 
-                        onClick={() => deleteOrder(order.id)}
-                        className="text-red-500 hover:text-red-400 transition-colors p-1"
-                        title="Excluir Pedido"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-xs text-stone-400 font-mono">
-                      {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <p className="text-lg font-mono">#{order.id}</p>
-                    {kitchenTab === 'history' && (
-                      <span className="text-[10px] text-stone-500">
-                        {new Date(order.created_at).toLocaleDateString()}
-                      </span>
-                    )}
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <AnimatePresence mode="popLayout">
+                    {groupedOrders.table.map(order => (
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                    ))}
+                  </AnimatePresence>
                 </div>
-              </div>
+              </section>
+            )}
 
-              <div className="flex-1 space-y-3 mb-8">
-                {order.items.map((item, idx) => (
-                  <div key={idx} className="border-b border-stone-700/50 pb-2 last:border-0">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <p className="font-bold text-stone-200">{item.name}</p>
-                        {item.observation && (
-                          <div className="flex items-center gap-1.5 mt-1 bg-yellow-500/10 px-2 py-1 rounded-lg w-fit">
-                            <Info size={12} className="text-yellow-500" />
-                            <p className="text-[11px] text-yellow-500 font-medium italic">{item.observation}</p>
-                          </div>
-                        )}
-                        {item.addons && item.addons.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {item.addons.map((a, aidx) => (
-                              <span key={aidx} className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-tighter">
-                                + {a.name}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <span className="bg-stone-700 text-white px-2.5 py-1 rounded-xl text-xs font-black ml-4">
-                        {item.quantity}x
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  {order.status === 'pending' && (
-                    <button 
-                      onClick={() => updateStatus(order.id, 'preparing')}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
-                    >
-                      <Clock size={18} /> Aceitar
-                    </button>
-                  )}
-                  {order.status === 'preparing' && (
-                    <button 
-                      onClick={() => updateStatus(order.id, 'ready')}
-                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle2 size={18} /> Pronto
-                    </button>
-                  )}
-                  {kitchenTab === 'history' && order.status === 'paid' && (
-                    <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
-                      Pago
-                    </div>
-                  )}
-                  {kitchenTab === 'history' && order.status === 'delivered' && (
-                    <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
-                      Entregue
-                    </div>
-                  )}
-                  <button 
-                    onClick={() => handlePrint(order)}
-                    className="bg-stone-700 hover:bg-stone-600 p-3 rounded-xl transition-colors"
-                  >
-                    <Printer size={20} />
-                  </button>
+            {groupedOrders.counter.length > 0 && (
+              <section className="space-y-6">
+                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
+                  <Coffee size={24} className="text-stone-500" />
+                  <h2 className="text-xl font-bold uppercase tracking-widest">Balcão</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.counter.length}</span>
                 </div>
-                {order.status === 'ready' && (
-                  <button 
-                    onClick={() => updateStatus(order.id, 'delivered')}
-                    className="w-full bg-stone-100 text-stone-900 py-3 rounded-xl font-bold hover:bg-white transition-colors uppercase text-xs tracking-widest"
-                  >
-                    Entregar Pedido
-                  </button>
-                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <AnimatePresence mode="popLayout">
+                    {groupedOrders.counter.map(order => (
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </section>
+            )}
+
+            {groupedOrders.delivery.length > 0 && (
+              <section className="space-y-6">
+                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
+                  <Truck size={24} className="text-stone-500" />
+                  <h2 className="text-xl font-bold uppercase tracking-widest text-emerald-500">Delivery</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.delivery.length}</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <AnimatePresence mode="popLayout">
+                    {groupedOrders.delivery.map(order => (
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </section>
+            )}
+
+            {displayOrders.length === 0 && (
+              <div className="py-20 text-center text-stone-500">
+                <ChefHat size={64} className="mx-auto mb-4 opacity-20" />
+                <p className="text-xl font-bold">Nenhum pedido ativo no momento.</p>
               </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
+            )}
+          </>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <AnimatePresence mode="popLayout">
+              {displayOrders.map(order => (
+                <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+              ))}
+            </AnimatePresence>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-const CustomerMenu = () => {
+const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | null, onClose?: () => void }) => {
   const [items, setItems] = useState<Item[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
-  const [selectedTable, setSelectedTable] = useState<number | null>(null);
+  const [selectedTable, setSelectedTable] = useState<number | null>(initialTableId ?? null);
   const [cart, setCart] = useState<{
     item: Item, 
     quantity: number, 
@@ -1728,7 +2219,8 @@ const CustomerMenu = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          table_id: selectedTable === -1 ? null : selectedTable,
+          table_id: (selectedTable === -1 || selectedTable === -2) ? null : selectedTable,
+          type: selectedTable === -2 ? 'delivery' : (selectedTable === -1 ? 'counter' : 'table'),
           items: cart.map(i => ({ 
             id: i.item.id, 
             quantity: i.quantity, 
@@ -1745,7 +2237,10 @@ const CustomerMenu = () => {
       setCart([]);
       setOrderSent(true);
       setShowCartDetails(false);
-      setTimeout(() => setOrderSent(false), 5000);
+      setTimeout(() => {
+        setOrderSent(false);
+        if (onClose) onClose();
+      }, 3000);
     } catch (err) {
       alert('Erro ao enviar pedido. Por favor, tente novamente.');
       console.error(err);
@@ -1788,21 +2283,39 @@ const CustomerMenu = () => {
           </div>
           
           <div className="flex flex-col md:flex-row items-center justify-center gap-8">
-            <button 
-              onClick={() => setSelectedTable(-1)}
-              className={cn(
-                "w-full md:w-auto px-10 py-6 rounded-3xl font-sans font-bold transition-all shadow-lg flex flex-col items-center gap-3 border-2",
-                selectedTable === -1 
-                  ? "bg-stone-900 border-stone-900 text-white scale-105 shadow-stone-200" 
-                  : "bg-white border-stone-100 text-stone-400 hover:border-stone-200"
-              )}
-            >
-              <Beer size={32} />
-              <div className="text-center">
-                <span className="block text-lg">Balcão</span>
-                <span className="text-[10px] uppercase tracking-widest opacity-60">Retirada Direta</span>
-              </div>
-            </button>
+            <div className="flex gap-4 w-full md:w-auto">
+              <button 
+                onClick={() => setSelectedTable(-1)}
+                className={cn(
+                  "flex-1 md:w-auto px-6 py-6 rounded-3xl font-sans font-bold transition-all shadow-lg flex flex-col items-center gap-3 border-2",
+                  selectedTable === -1 
+                    ? "bg-stone-900 border-stone-900 text-white scale-105 shadow-stone-200" 
+                    : "bg-white border-stone-100 text-stone-400 hover:border-stone-200"
+                )}
+              >
+                <Coffee size={32} />
+                <div className="text-center">
+                  <span className="block text-lg">Balcão</span>
+                  <span className="text-[10px] uppercase tracking-widest opacity-60">Retirada</span>
+                </div>
+              </button>
+
+              <button 
+                onClick={() => setSelectedTable(-2)}
+                className={cn(
+                  "flex-1 md:w-auto px-6 py-6 rounded-3xl font-sans font-bold transition-all shadow-lg flex flex-col items-center gap-3 border-2",
+                  selectedTable === -2 
+                    ? "bg-stone-900 border-stone-900 text-white scale-105 shadow-stone-200" 
+                    : "bg-white border-stone-100 text-stone-400 hover:border-stone-200"
+                )}
+              >
+                <Truck size={32} />
+                <div className="text-center">
+                  <span className="block text-lg">Delivery</span>
+                  <span className="text-[10px] uppercase tracking-widest opacity-60">Entrega</span>
+                </div>
+              </button>
+            </div>
 
             <div className="hidden md:block w-px h-24 bg-stone-200" />
             <div className="md:hidden w-full h-px bg-stone-200" />

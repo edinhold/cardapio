@@ -43,7 +43,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     table_id INTEGER,
     total_price REAL NOT NULL,
-    status TEXT DEFAULT 'pending', -- 'pending', 'preparing', 'ready', 'delivered', 'paid'
+    status TEXT DEFAULT 'pending', -- 'pending', 'preparing', 'ready', 'delivered', 'paid', 'canceled'
+    type TEXT DEFAULT 'table', -- 'table', 'counter', 'delivery'
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(table_id) REFERENCES tables(id)
   );
@@ -72,6 +73,13 @@ db.exec(`
 // Migration: Ensure observation column exists in order_items
 try {
   db.prepare("ALTER TABLE order_items ADD COLUMN observation TEXT").run();
+} catch (e) {
+  // Column probably already exists
+}
+
+// Migration: Ensure type column exists in orders
+try {
+  db.prepare("ALTER TABLE orders ADD COLUMN type TEXT DEFAULT 'table'").run();
 } catch (e) {
   // Column probably already exists
 }
@@ -205,7 +213,7 @@ async function startServer() {
   app.post("/api/tables/:id/close", (req, res) => {
     const tableId = req.params.id;
     const transaction = db.transaction(() => {
-      db.prepare("UPDATE orders SET status = 'paid' WHERE table_id = ? AND status != 'paid'").run(tableId);
+      db.prepare("UPDATE orders SET status = 'paid' WHERE table_id = ? AND status NOT IN ('paid', 'canceled')").run(tableId);
       db.prepare("UPDATE tables SET status = 'available' WHERE id = ?").run(tableId);
     });
     transaction();
@@ -215,7 +223,7 @@ async function startServer() {
 
   app.post("/api/counter/close", (req, res) => {
     const transaction = db.transaction(() => {
-      db.prepare("UPDATE orders SET status = 'paid' WHERE table_id IS NULL AND status != 'paid'").run();
+      db.prepare("UPDATE orders SET status = 'paid' WHERE (type = 'counter' OR (type = 'table' AND table_id IS NULL)) AND status NOT IN ('paid', 'canceled')").run();
     });
     transaction();
     broadcast({ type: 'ORDER_UPDATED', id: 'counter', status: 'paid' });
@@ -226,7 +234,7 @@ async function startServer() {
     const orders = db.prepare(`
       SELECT o.*, 'Balcão' as table_number 
       FROM orders o 
-      WHERE o.table_id IS NULL AND o.status != 'paid'
+      WHERE (o.type = 'counter' OR (o.type = 'table' AND o.table_id IS NULL)) AND o.status NOT IN ('paid', 'canceled')
       ORDER BY o.created_at DESC
     `).all();
     
@@ -259,7 +267,7 @@ async function startServer() {
       SELECT o.*, t.number as table_number 
       FROM orders o 
       LEFT JOIN tables t ON o.table_id = t.id
-      WHERE o.table_id = ? AND o.status != 'paid'
+      WHERE o.table_id = ? AND o.status NOT IN ('paid', 'canceled')
       ORDER BY o.created_at DESC
     `).all(req.params.id);
     
@@ -298,7 +306,7 @@ async function startServer() {
     const params: any[] = [];
 
     if (status === 'active') {
-      query += " WHERE o.status NOT IN ('paid', 'delivered')";
+      query += " WHERE o.status NOT IN ('paid', 'delivered', 'canceled')";
     } else if (status) {
       query += " WHERE o.status = ?";
       params.push(status);
@@ -333,12 +341,12 @@ async function startServer() {
   });
 
   app.post("/api/orders", (req, res) => {
-    const { table_id, items, total_price } = req.body;
+    const { table_id, items, total_price, type = 'table' } = req.body;
     
     const transaction = db.transaction(() => {
       const orderResult = db.prepare(
-        "INSERT INTO orders (table_id, total_price, status) VALUES (?, ?, 'pending')"
-      ).run(table_id, total_price);
+        "INSERT INTO orders (table_id, total_price, status, type) VALUES (?, ?, 'pending', ?)"
+      ).run(table_id, total_price, type);
       
       const orderId = orderResult.lastInsertRowid;
       
@@ -380,19 +388,87 @@ async function startServer() {
 
   app.patch("/api/orders/:id", (req, res) => {
     const { status } = req.body;
-    db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(status, req.params.id);
-    broadcast({ type: 'ORDER_UPDATED', id: req.params.id, status });
+    const orderId = req.params.id;
+    
+    const transaction = db.transaction(() => {
+      db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(status, orderId);
+      
+      const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId) as any;
+      if (order && order.table_id && (status === 'paid' || status === 'canceled')) {
+        // Check if there are other active orders for this table
+        const otherOrders = db.prepare("SELECT COUNT(*) as count FROM orders WHERE table_id = ? AND status NOT IN ('paid', 'canceled')").get(order.table_id) as { count: number };
+        if (otherOrders.count === 0) {
+          db.prepare("UPDATE tables SET status = 'available' WHERE id = ?").run(order.table_id);
+          broadcast({ type: 'TABLE_UPDATED', id: order.table_id, status: 'available' });
+        }
+      }
+    });
+    
+    transaction();
+    broadcast({ type: 'ORDER_UPDATED', id: orderId, status });
     res.json({ success: true });
   });
 
   app.delete("/api/orders/:id", (req, res) => {
+    const orderId = req.params.id;
+    const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId) as any;
+    
+    if (!order) return res.status(404).json({ error: "Pedido não encontrado" });
+
     const transaction = db.transaction(() => {
-      db.prepare("DELETE FROM order_item_addons WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)").run(req.params.id);
-      db.prepare("DELETE FROM order_items WHERE order_id = ?").run(req.params.id);
-      db.prepare("DELETE FROM orders WHERE id = ?").run(req.params.id);
+      db.prepare("UPDATE orders SET status = 'canceled' WHERE id = ?").run(orderId);
+      if (order.table_id) {
+        // Check if there are other active orders for this table
+        const otherOrders = db.prepare("SELECT COUNT(*) as count FROM orders WHERE table_id = ? AND status NOT IN ('paid', 'canceled')").get(order.table_id) as { count: number };
+        if (otherOrders.count === 0) {
+          db.prepare("UPDATE tables SET status = 'available' WHERE id = ?").run(order.table_id);
+          broadcast({ type: 'TABLE_UPDATED', id: order.table_id, status: 'available' });
+        }
+      }
     });
     transaction();
-    broadcast({ type: 'ORDER_UPDATED', id: req.params.id, status: 'deleted' });
+    broadcast({ type: 'ORDER_UPDATED', id: orderId, status: 'canceled' });
+    res.json({ success: true });
+  });
+
+  app.get("/api/delivery/orders", (req, res) => {
+    const orders = db.prepare(`
+      SELECT o.*, 'Delivery' as table_number 
+      FROM orders o 
+      WHERE o.type = 'delivery' AND o.status != 'paid' AND o.status != 'canceled'
+      ORDER BY o.created_at DESC
+    `).all();
+    
+    const ordersWithItems = orders.map((order: any) => {
+      const items = db.prepare(`
+        SELECT oi.*, i.name 
+        FROM order_items oi 
+        JOIN items i ON oi.item_id = i.id 
+        WHERE oi.order_id = ?
+      `).all(order.id);
+
+      const itemsWithAddons = items.map((item: any) => {
+        const addons = db.prepare(`
+          SELECT oia.*, a.name 
+          FROM order_item_addons oia 
+          JOIN addons a ON oia.addon_id = a.id 
+          WHERE oia.order_item_id = ?
+        `).all(item.id);
+        return { ...item, addons };
+      });
+
+      return { ...order, items: itemsWithAddons };
+    });
+    
+    res.json(ordersWithItems);
+  });
+
+  app.post("/api/delivery/close", (req, res) => {
+    const transaction = db.transaction(() => {
+      db.prepare("UPDATE orders SET status = 'paid' WHERE type = 'delivery' AND status != 'paid' AND status != 'canceled'").run();
+    });
+    transaction();
+    broadcast({ type: 'ORDER_UPDATED', id: 'delivery', status: 'paid' });
     res.json({ success: true });
   });
 
@@ -425,14 +501,14 @@ async function startServer() {
   });
 
   app.get("/api/stats", (req, res) => {
-    const daily = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) = date('now')").get() as { total: number | null } | undefined;
-    const weekly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-7 days')").get() as { total: number | null } | undefined;
-    const monthly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-30 days')").get() as { total: number | null } | undefined;
+    const daily = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) = date('now') AND status = 'paid'").get() as { total: number | null } | undefined;
+    const weekly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-7 days') AND status = 'paid'").get() as { total: number | null } | undefined;
+    const monthly = db.prepare("SELECT SUM(total_price) as total FROM orders WHERE date(created_at) >= date('now', '-30 days') AND status = 'paid'").get() as { total: number | null } | undefined;
     
     const salesOverTime = db.prepare(`
       SELECT date(created_at) as date, SUM(total_price) as total 
       FROM orders 
-      WHERE date(created_at) >= date('now', '-30 days')
+      WHERE date(created_at) >= date('now', '-30 days') AND status = 'paid'
       GROUP BY date(created_at)
       ORDER BY date(created_at) ASC
     `).all();
@@ -443,6 +519,33 @@ async function startServer() {
       monthly: monthly?.total || 0,
       salesOverTime
     });
+  });
+
+  app.post("/api/system/reset", (req, res) => {
+    const transaction = db.transaction(() => {
+      db.prepare("DELETE FROM order_item_addons").run();
+      db.prepare("DELETE FROM order_items").run();
+      db.prepare("DELETE FROM orders").run();
+      db.prepare("UPDATE tables SET status = 'available'").run();
+    });
+    transaction();
+    broadcast({ type: 'SYSTEM_RESET' });
+    res.json({ success: true });
+  });
+
+  app.post("/api/system/clear-menu", (req, res) => {
+    const transaction = db.transaction(() => {
+      // We must clear orders first because of foreign keys
+      db.prepare("DELETE FROM order_item_addons").run();
+      db.prepare("DELETE FROM order_items").run();
+      db.prepare("DELETE FROM orders").run();
+      db.prepare("DELETE FROM addons").run();
+      db.prepare("DELETE FROM items").run();
+      db.prepare("UPDATE tables SET status = 'available'").run();
+    });
+    transaction();
+    broadcast({ type: 'MENU_CLEARED' });
+    res.json({ success: true });
   });
 
   // Vite middleware for development
