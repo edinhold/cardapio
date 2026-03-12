@@ -3,8 +3,24 @@ import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
 const dbPath = process.env.DATABASE_PATH || "restaurant.db";
+const dbDir = path.dirname(dbPath);
+
+// Ensure database directory exists
+if (dbDir !== "." && !fs.existsSync(dbDir)) {
+  console.log(`Creating database directory: ${dbDir}`);
+  try {
+    fs.mkdirSync(dbDir, { recursive: true });
+  } catch (err) {
+    console.error(`Error creating database directory ${dbDir}:`, err);
+  }
+}
+
+console.log(`Server initializing at ${new Date().toISOString()}`);
+console.log(`Database path: ${path.resolve(dbPath)}`);
+
 const db = new Database(dbPath);
 
 // Initialize Database
@@ -70,6 +86,11 @@ db.exec(`
   );
 `);
 
+// Log current state
+const itemCount = db.prepare("SELECT COUNT(*) as count FROM items").get() as { count: number };
+const orderCount = db.prepare("SELECT COUNT(*) as count FROM orders").get() as { count: number };
+console.log(`Database state: ${itemCount.count} items, ${orderCount.count} orders found.`);
+
 // Migration: Ensure observation column exists in order_items
 try {
   db.prepare("ALTER TABLE order_items ADD COLUMN observation TEXT").run();
@@ -110,6 +131,19 @@ async function startServer() {
 
   // API Routes
   
+  app.get("/api/health", (req, res) => {
+    const itemCount = db.prepare("SELECT COUNT(*) as count FROM items").get() as { count: number };
+    res.json({
+      status: "ok",
+      uptime: process.uptime(),
+      database: {
+        path: dbPath,
+        items: itemCount.count
+      },
+      environment: process.env.NODE_ENV || "development"
+    });
+  });
+
   // Items
   app.get("/api/items", (req, res) => {
     const items = db.prepare("SELECT * FROM items").all();
