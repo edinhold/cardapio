@@ -290,31 +290,7 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-[400px] flex flex-col">
-          <h3 className="text-xl font-bold mb-6 font-serif italic">Desempenho de Vendas</h3>
-          <div className="flex-1 min-h-0">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-              <AreaChart data={stats.salesOverTime}>
-                <defs>
-                  <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#1c1917" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#1c1917" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#78716c', fontSize: 12}} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#78716c', fontSize: 12}} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                />
-                <Area type="monotone" dataKey="total" stroke="#1c1917" strokeWidth={2} fillOpacity={1} fill="url(#colorTotal)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm overflow-y-auto flex flex-col">
+      <div className="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm overflow-y-auto flex flex-col">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
             <h3 className="text-xl font-bold font-serif italic">Pedidos</h3>
             <div className="flex flex-wrap gap-2">
@@ -380,7 +356,6 @@ const AdminDashboard = () => {
             ))}
           </div>
         </div>
-      </div>
     </div>
   );
 };
