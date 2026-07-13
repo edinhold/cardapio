@@ -1,0 +1,95 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "A menu item (dish or drink)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string", "enum": ["dish", "drink"] },
+        "is_dish_of_day": { "type": "boolean" },
+        "image_url": { "type": "string" },
+        "icon": { "type": "string" },
+        "observation_info": { "type": "string" }
+      },
+      "required": ["name", "price", "category"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "A restaurant employee",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["name", "role"]
+    },
+    "Table": {
+      "title": "Table",
+      "description": "A restaurant table",
+      "type": "object",
+      "properties": {
+        "number": { "type": "integer" },
+        "status": { "type": "string", "enum": ["available", "occupied", "reserved"] }
+      },
+      "required": ["number"]
+    },
+    "Addon": {
+      "title": "Addon",
+      "description": "An extra item for a dish",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" }
+      },
+      "required": ["name", "price"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer order",
+      "type": "object",
+      "properties": {
+        "table_id": { "type": "string" },
+        "table_number": { "type": "integer" },
+        "total_price": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "preparing", "ready", "delivered", "paid", "canceled"] },
+        "type": { "type": "string", "enum": ["table", "counter", "delivery"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item_id": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "integer" },
+              "price_at_time": { "type": "number" },
+              "observation": { "type": "string" },
+              "addons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "addon_id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "price_at_time": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["total_price", "status", "type", "created_at"]
+    }
+  },
+  "firestore": {
+    "/items": { "schema": "Item", "description": "Menu items" },
+    "/employees": { "schema": "Employee", "description": "Staff members" },
+    "/tables": { "schema": "Table", "description": "Restaurant tables" },
+    "/addons": { "schema": "Addon", "description": "Available addons" },
+    "/orders": { "schema": "Order", "description": "Customer orders" }
+  }
+}

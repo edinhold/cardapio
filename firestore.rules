@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated();
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /items/{itemId} {
+      allow read: if true; // Menu is public
+      allow write: if isAdmin();
+    }
+    
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /tables/{tableId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+    
+    match /addons/{addonId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    match /orders/{orderId} {
+      allow read: if isAuthenticated();
+      allow create: if true; // Allow anyone to place an order
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -30,7 +30,10 @@ import {
   Apple,
   Cake,
   Truck,
-  XCircle
+  XCircle,
+  LogOut,
+  AlertCircle,
+  QrCode
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -47,6 +50,432 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Item, Employee, Table, Order, SalesStats, Addon } from './types';
+import { db, auth } from './firebase';
+import { 
+  collection, 
+  query, 
+  onSnapshot, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  orderBy, 
+  limit, 
+  where,
+  getDocs,
+  writeBatch,
+  Timestamp,
+  getDoc,
+  setDoc
+} from 'firebase/firestore';
+import { 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  User as FirebaseUser
+} from 'firebase/auth';
+
+// --- Error Handling ---
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  // We don't throw here to avoid crashing the whole app if a background listener fails,
+  // but we could if we wanted to trigger the ErrorBoundary.
+  // throw new Error(JSON.stringify(errInfo));
+}
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, errorInfo: string | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorInfo: error.message };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let displayMessage = "Ocorreu um erro inesperado.";
+      try {
+        const parsed = JSON.parse(this.state.errorInfo || "");
+        if (parsed.error && parsed.error.includes("permissions")) {
+          displayMessage = "Você não tem permissão para realizar esta ação ou acessar estes dados.";
+        }
+      } catch (e) {
+        // Not a JSON error
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
+          <div className="bg-white p-8 rounded-[40px] shadow-2xl border border-stone-100 max-w-md text-center">
+            <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+              <XCircle size={40} />
+            </div>
+            <h2 className="text-2xl font-bold italic mb-4">Ops! Algo deu errado</h2>
+            <p className="text-stone-500 mb-8 font-sans">{displayMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-stone-900 text-white py-4 rounded-full font-bold hover:bg-stone-800 transition-all"
+            >
+              Recarregar Aplicativo
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// --- Shared Utilities ---
+
+const handlePrint = (order: Order) => {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Pedido #${order.id}</title>
+        <style>
+          @page { margin: 0; }
+          body { font-family: 'Courier New', Courier, monospace; padding: 20px; color: #000; }
+          .header { border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 10px; }
+          .footer { border-top: 2px dashed #000; padding-top: 10px; margin-top: 10px; }
+          .item { display: flex; justify-content: space-between; margin-bottom: 5px; }
+          .addon { font-size: 0.8em; margin-left: 15px; }
+          .obs { font-style: italic; font-size: 0.8em; margin-top: 2px; }
+          .delivery-info { background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <h2 style="margin: 0;">PEDIDO #${order.id.slice(-4).toUpperCase()}</h2>
+            <span>${new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+          <p style="font-weight: bold; font-size: 1.2em; margin: 5px 0;">
+            ${order.type === 'delivery' ? 'DELIVERY' : (order.type === 'counter' ? 'BALCÃO' : `MESA: ${order.table_number}`)}
+          </p>
+          ${order.delivery_info ? `
+            <div class="delivery-info">
+              <p style="margin: 0; font-weight: bold;">Cliente: ${order.delivery_info.name}</p>
+              <p style="margin: 0; font-size: 0.9em;">Tel: ${order.delivery_info.phone}</p>
+              <p style="margin: 0; font-size: 0.9em;">End: ${order.delivery_info.address}</p>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="content">
+          ${order.items.map(item => `
+            <div style="margin-bottom: 10px;">
+              <div class="item">
+                <span style="font-weight: bold;">${item.quantity}x ${item.name}</span>
+                <span>R$ ${(item.price_at_time * item.quantity).toFixed(2)}</span>
+              </div>
+              ${item.observation ? `<div class="obs">Obs: ${item.observation}</div>` : ''}
+              ${item.addons && item.addons.length > 0 ? `
+                <div style="color: #444;">
+                  ${item.addons.map(a => `<div class="addon">+ ${a.name}</div>`).join('')}
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="footer">
+          <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.2em;">
+            <span>TOTAL</span>
+            <span>R$ ${order.total_price.toFixed(2)}</span>
+          </div>
+          <p style="text-align: center; font-size: 0.7em; margin-top: 20px; opacity: 0.5;">
+            ${new Date(order.created_at).toLocaleString()}
+          </p>
+        </div>
+        <script>
+          window.onload = () => {
+            window.print();
+            setTimeout(() => window.close(), 500);
+          };
+        </script>
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
+};
+
+const consolidateItems = (orders: Order[]) => {
+  const consolidated: { [key: string]: { name: string; quantity: number; price_at_time: number; addons: any[] } } = {};
+  orders.forEach(order => {
+    order.items.forEach(item => {
+      const addonNames = item.addons ? item.addons.map(a => a.name).sort().join(',') : '';
+      const key = `${item.item_id || item.name}_${addonNames}`;
+      if (consolidated[key]) {
+        consolidated[key].quantity += item.quantity;
+      } else {
+        consolidated[key] = {
+          name: item.name,
+          quantity: item.quantity,
+          price_at_time: item.price_at_time,
+          addons: item.addons || []
+        };
+      }
+    });
+  });
+  return Object.values(consolidated);
+};
+
+const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+  
+  const consolidated = consolidateItems(orders);
+  
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Comprovante - ${title}</title>
+        <style>
+          @page { margin: 0; }
+          body { 
+            font-family: 'Courier New', Courier, monospace; 
+            padding: 20px; 
+            color: #000; 
+            background: #fff;
+            max-width: 380px;
+            margin: 0 auto;
+          }
+          .center { text-align: center; }
+          .header { border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 15px; }
+          .footer { border-top: 2px dashed #000; padding-top: 10px; margin-top: 15px; text-align: center; font-size: 0.8em; }
+          .item { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.9em; }
+          .addon { font-size: 0.8em; margin-left: 15px; font-style: italic; opacity: 0.8; }
+          .total { 
+            border-top: 1px dashed #000; 
+            margin-top: 10px; 
+            padding-top: 10px; 
+            display: flex; 
+            justify-content: space-between; 
+            font-weight: bold; 
+            font-size: 1.15em; 
+          }
+          .title { font-size: 1.4em; font-weight: bold; margin: 5px 0; letter-spacing: 1px; }
+          .subtitle { font-size: 0.95em; text-transform: uppercase; font-weight: bold; margin-bottom: 5px; }
+        </style>
+      </head>
+      <body>
+        <div class="header center">
+          <div class="title">SABOR CASEIRO</div>
+          <div class="subtitle">Comprovante de Fechamento</div>
+          <div style="font-size: 0.8em; margin-top: 5px; line-height: 1.4;">
+            <strong>${title}</strong><br/>
+            Data: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR')}
+          </div>
+        </div>
+
+        <div style="font-size: 0.85em; margin-bottom: 12px; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 4px;">
+          ITENS CONSUMIDOS:
+        </div>
+
+        <div>
+          ${consolidated.map(item => `
+            <div style="margin-bottom: 8px;">
+              <div class="item">
+                <span>${item.quantity}x ${item.name}</span>
+                <span>R$ ${(item.price_at_time * item.quantity).toFixed(2)}</span>
+              </div>
+              ${item.addons && item.addons.length > 0 ? `
+                <div class="addon">
+                  + ${item.addons.map(a => `${a.name} (R$ ${a.price.toFixed(2)})`).join(', ')}
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="total">
+          <span>VALOR TOTAL</span>
+          <span>R$ ${total.toFixed(2)}</span>
+        </div>
+
+        <div class="footer">
+          <p style="margin: 3px 0; font-weight: bold;">Obrigado pela preferência!</p>
+          <p style="margin: 3px 0; font-size: 0.8em; opacity: 0.7;">Volte sempre!</p>
+          <p style="margin-top: 15px; font-size: 0.7em; opacity: 0.4;">Sabor Caseiro System</p>
+        </div>
+
+        <script>
+          window.onload = () => {
+            window.print();
+            setTimeout(() => window.close(), 500);
+          };
+        </script>
+      </body>
+    </html>
+  `);
+  printWindow.document.close();
+};
+
+// --- Auth Component ---
+
+const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const isIframe = window.self !== window.top;
+
+  const handleLogin = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      onLogin();
+    } catch (err: any) {
+      console.error("Login error:", err);
+      if (err && (err.code === "auth/popup-blocked" || err.message?.includes("popup-blocked") || err.message?.includes("closed-by-user"))) {
+        setError("popup-blocked");
+      } else if (err && err.message) {
+        setError(err.message);
+      } else {
+        setError("Ocorreu um erro ao realizar o login. Por favor, tente novamente.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
+      <div className="bg-white p-10 rounded-[40px] shadow-2xl border border-stone-100 max-w-md w-full text-center">
+        <div className="w-20 h-20 bg-stone-900 text-white rounded-full flex items-center justify-center mx-auto mb-8">
+          <ChefHat size={40} />
+        </div>
+        <h2 className="text-3xl font-bold italic mb-2">Bem-vindo</h2>
+        <p className="text-stone-500 mb-8 font-sans">Acesse o painel administrativo ou de cozinha.</p>
+        
+        {isIframe && !error && (
+          <div className="mb-6 p-4 bg-stone-50 border border-stone-150 rounded-2xl text-left flex gap-3 text-stone-600">
+            <Info size={18} className="shrink-0 mt-0.5 text-stone-500" />
+            <p className="text-xs leading-relaxed font-sans">
+              Para evitar bloqueios de pop-up do Google pelo navegador neste painel, recomendamos abrir o aplicativo em uma nova aba.
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <button 
+            onClick={handleLogin}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-3 bg-white border-2 border-stone-100 py-4 rounded-full font-bold hover:bg-stone-50 transition-all shadow-sm"
+          >
+            {loading ? (
+              <div className="w-5 h-5 border-2 border-stone-900 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <>
+                <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
+                Entrar com Google
+              </>
+            )}
+          </button>
+
+          {isIframe && (
+            <a 
+              href={window.location.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full block text-center border border-stone-200 text-stone-700 bg-stone-50 hover:bg-stone-100 py-3.5 rounded-full font-bold transition-all text-sm font-sans"
+            >
+              Abrir em Nova Aba ↗
+            </a>
+          )}
+        </div>
+
+        {error && (
+          <div className="mt-6 p-4 bg-amber-50 border border-amber-200/60 rounded-3xl text-left space-y-3">
+            <div className="flex items-start gap-3 text-amber-800">
+              <AlertCircle size={20} className="shrink-0 mt-0.5 text-amber-600" />
+              <div>
+                <p className="font-semibold text-sm">Acesso Bloqueado ou Cancelado</p>
+                <p className="text-xs text-amber-750 leading-relaxed font-sans mt-1">
+                  Seu navegador bloqueou o pop-up de login do Google ou ele foi fechado antes da conclusão. Como o app está rodando de forma integrada (iframe), o login requer autorização ou abertura direta.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 pt-1 font-sans">
+              <button
+                onClick={handleLogin}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors"
+              >
+                Tentar Novamente
+              </button>
+              <a
+                href={window.location.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 bg-white hover:bg-stone-50 text-stone-700 border border-stone-200 text-xs font-bold py-2.5 px-4 rounded-xl transition-colors text-center inline-block"
+              >
+                Abrir em Nova Aba ↗
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -86,85 +515,88 @@ const AdminDashboard = () => {
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<'all' | 'counter' | 'table' | 'delivery'>('all');
 
-  const fetchStats = () => {
-    fetch('/api/stats')
-      .then(res => res.json())
-      .then(setStats)
-      .catch(err => {
-        console.error('Stats fetch error:', err);
-        alert('Erro ao carregar estatísticas.');
-      });
-  };
+  useEffect(() => {
+    const q = query(collection(db, 'orders'), orderBy('created_at', 'desc'), limit(50));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setRecentOrders(orders);
+      
+      // Calculate stats on client side
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const thisWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime();
+      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
-  const fetchOrders = () => {
-    fetch('/api/orders')
-      .then(res => res.json())
-      .then(data => setRecentOrders(data))
-      .catch(err => console.error('Orders fetch error:', err));
-  };
+      let daily = 0;
+      let weekly = 0;
+      let monthly = 0;
+      const salesMap: Record<string, number> = {};
+
+      orders.forEach(o => {
+        if (o.status === 'canceled') return;
+        const date = new Date(o.created_at);
+        const time = date.getTime();
+        const dateStr = date.toLocaleDateString();
+
+        if (time >= today) daily += o.total_price;
+        if (time >= thisWeek) weekly += o.total_price;
+        if (time >= thisMonth) monthly += o.total_price;
+
+        salesMap[dateStr] = (salesMap[dateStr] || 0) + o.total_price;
+      });
+
+      const salesOverTime = Object.entries(salesMap)
+        .map(([date, total]) => ({ date, total }))
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        .slice(-7);
+
+      setStats({ daily, weekly, monthly, salesOverTime });
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleSystemReset = async () => {
-    if (!confirm('ATENÇÃO: Isso apagará TODOS os pedidos e resetará o status das mesas. Esta ação não pode ser desfeita. Deseja continuar?')) return;
+    if (!window.confirm('ATENÇÃO: Isso apagará TODOS os pedidos e resetará o status das mesas. Esta ação não pode ser desfeita. Deseja continuar?')) return;
     
     try {
-      const res = await fetch('/api/system/reset', { method: 'POST' });
-      if (res.ok) {
-        alert('Sistema limpo com sucesso!');
-        fetchStats();
-        fetchOrders();
-      } else {
-        throw new Error('Falha ao resetar sistema');
-      }
+      const batch = writeBatch(db);
+      const ordersSnap = await getDocs(collection(db, 'orders'));
+      ordersSnap.forEach(doc => batch.delete(doc.ref));
+      const tablesSnap = await getDocs(collection(db, 'tables'));
+      tablesSnap.forEach(doc => batch.update(doc.ref, { status: 'available' }));
+      await batch.commit();
+      alert('Sistema limpo com sucesso!');
     } catch (err) {
-      console.error('Reset error:', err);
-      alert('Erro ao limpar sistema.');
+      handleFirestoreError(err, OperationType.WRITE, 'system-reset');
     }
   };
 
-  useEffect(() => {
-    fetchStats();
-    fetchOrders();
-
-    // WebSocket for instant updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let ws: WebSocket;
-    let reconnectTimer: any;
-
-    const connect = () => {
-      ws = new WebSocket(`${protocol}//${window.location.host}`);
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('Admin: Mensagem recebida:', data.type);
-          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED' || data.type === 'SYSTEM_RESET' || data.type === 'MENU_CLEARED') {
-            fetchOrders();
-            fetchStats();
-          }
-        } catch (e) { console.error('WS error:', e); }
-      };
-
-      ws.onopen = () => {
-        console.log('Admin: Conectado ao servidor de pedidos');
-      };
-
-      ws.onclose = () => {
-        console.log('Admin: Conexão fechada, tentando reconectar...');
-        reconnectTimer = setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-    return () => {
-      if (ws) ws.close();
-      clearTimeout(reconnectTimer);
-    };
-  }, []);
-
   const handlePrintReport = async (period: 'day' | 'week' | 'month') => {
     try {
-      const res = await fetch(`/api/reports?period=${period}`);
-      const data = await res.json();
+      const now = new Date();
+      let startTime = 0;
+      if (period === 'day') startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      else if (period === 'week') startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+      else startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30).getTime();
+
+      const filteredOrders = recentOrders.filter(o => new Date(o.created_at).getTime() >= startTime && o.status !== 'canceled');
+      
+      const itemsMap: Record<string, { name: string, quantity: number, total: number }> = {};
+      let totalRevenue = 0;
+
+      filteredOrders.forEach(o => {
+        totalRevenue += o.total_price;
+        o.items.forEach(i => {
+          const key = i.item_id;
+          if (!itemsMap[key]) itemsMap[key] = { name: i.name || 'Item', quantity: 0, total: 0 };
+          itemsMap[key].quantity += i.quantity;
+          itemsMap[key].total += i.price_at_time * i.quantity;
+        });
+      });
+
+      const itemsSold = Object.values(itemsMap);
       
       const printWindow = window.open('', '_blank');
       if (!printWindow) return;
@@ -201,7 +633,7 @@ const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody>
-                ${data.itemsSold.map((item: any) => `
+                ${itemsSold.map((item: any) => `
                   <tr>
                     <td>${item.name}</td>
                     <td style="text-align: center;">${item.quantity}</td>
@@ -213,7 +645,7 @@ const AdminDashboard = () => {
             <hr/>
             <div class="total-row">
               <span>TOTAL GERAL:</span>
-              <span>R$ ${data.totalRevenue.toFixed(2)}</span>
+              <span>R$ ${totalRevenue.toFixed(2)}</span>
             </div>
             <p style="margin-top: 40px; border-top: 1px solid #ccc; padding-top: 10px;">Assinatura Responsável</p>
             <p style="margin-top: 30px; font-size: 0.7em;">Fim do Relatório</p>
@@ -233,18 +665,12 @@ const AdminDashboard = () => {
     }
   };
 
-  const cancelOrder = async (id: number) => {
-    if (!confirm('Tem certeza que deseja cancelar este pedido?')) return;
+  const cancelOrder = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja cancelar este pedido?')) return;
     try {
-      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Erro ao cancelar pedido');
-      fetch('/api/orders')
-        .then(res => res.json())
-        .then(data => setRecentOrders(data));
-      fetch('/api/stats').then(res => res.json()).then(setStats);
+      await updateDoc(doc(db, 'orders', id), { status: 'canceled' });
     } catch (err) {
-      console.error('Cancel order error:', err);
-      alert('Erro ao cancelar pedido.');
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
     }
   };
 
@@ -324,8 +750,8 @@ const AdminDashboard = () => {
                   <p className="font-bold text-stone-900">
                     #{order.id} - {
                       order.type === 'delivery' ? 'Delivery' : 
-                      order.table_number ? `Mesa ${order.table_number}` : 
-                      'Balcão'
+                      order.type === 'counter' ? 'Balcão' : 
+                      `Mesa ${order.table_number}`
                     }
                   </p>
                   <p className="text-xs text-stone-400">{new Date(order.created_at).toLocaleTimeString()}</p>
@@ -380,15 +806,14 @@ const MenuManagement = () => {
     observation_info: ''
   });
 
-  const fetchItems = () => 
-    fetch('/api/items')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch items');
-        return res.json();
-      })
-      .then(setItems)
-      .catch(err => console.error('Items fetch error:', err));
-  useEffect(() => { fetchItems(); }, []);
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'items'), (snapshot) => {
+      setItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'items');
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleOpenForm = (item?: Item) => {
     if (item) {
@@ -398,7 +823,7 @@ const MenuManagement = () => {
         description: item.description || '',
         price: item.price.toString(),
         category: item.category,
-        is_dish_of_day: item.is_dish_of_day === 1,
+        is_dish_of_day: !!item.is_dish_of_day,
         image_url: item.image_url || '',
         icon: item.icon || '',
         observation_info: item.observation_info || ''
@@ -471,57 +896,55 @@ const MenuManagement = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (editingItem && !confirm('Deseja salvar as alterações neste item?')) {
+    if (editingItem && !window.confirm('Deseja salvar as alterações neste item?')) {
       return;
     }
 
     setIsSaving(true);
     try {
-      const url = editingItem ? `/api/items/${editingItem.id}` : '/api/items';
-      const method = editingItem ? 'PATCH' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, price: parseFloat(formData.price) })
-      });
-
-      if (!res.ok) throw new Error('Erro ao salvar item');
+      const data = { ...formData, price: parseFloat(formData.price) };
+      if (editingItem) {
+        await updateDoc(doc(db, 'items', editingItem.id), data);
+      } else {
+        await addDoc(collection(db, 'items'), data);
+      }
       
       setFormData({ name: '', description: '', price: '', category: 'dish', is_dish_of_day: false, image_url: '', icon: '', observation_info: '' });
       setEditingItem(null);
       setShowForm(false);
-      fetchItems();
     } catch (err) {
-      alert('Erro ao salvar item. Verifique se a imagem não é muito grande.');
-      console.error(err);
+      handleFirestoreError(err, editingItem ? OperationType.UPDATE : OperationType.CREATE, editingItem ? `items/${editingItem.id}` : 'items');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const deleteItem = async (e: React.MouseEvent, id: number) => {
+  const deleteItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (confirm('Tem certeza que deseja remover este item?')) {
-      await fetch(`/api/items/${id}`, { method: 'DELETE' });
-      fetchItems();
+    if (window.confirm('Tem certeza que deseja remover este item?')) {
+      try {
+        await deleteDoc(doc(db, 'items', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `items/${id}`);
+      }
     }
   };
 
   const handleClearMenu = async () => {
-    if (!confirm('ATENÇÃO: Isso apagará TODOS os produtos e adicionais cadastrados, além de todos os pedidos existentes. Esta ação não pode ser desfeita. Deseja continuar?')) return;
+    if (!window.confirm('ATENÇÃO: Isso apagará TODOS os produtos e adicionais cadastrados, além de todos os pedidos existentes. Esta ação não pode ser desfeita. Deseja continuar?')) return;
     
     try {
-      const res = await fetch('/api/system/clear-menu', { method: 'POST' });
-      if (res.ok) {
-        alert('Cardápio limpo com sucesso!');
-        fetchItems();
-      } else {
-        throw new Error('Falha ao limpar cardápio');
-      }
+      const batch = writeBatch(db);
+      const itemsSnap = await getDocs(collection(db, 'items'));
+      itemsSnap.forEach(doc => batch.delete(doc.ref));
+      const addonsSnap = await getDocs(collection(db, 'addons'));
+      addonsSnap.forEach(doc => batch.delete(doc.ref));
+      const ordersSnap = await getDocs(collection(db, 'orders'));
+      ordersSnap.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      alert('Cardápio limpo com sucesso!');
     } catch (err) {
-      console.error('Clear menu error:', err);
-      alert('Erro ao limpar cardápio.');
+      handleFirestoreError(err, OperationType.WRITE, 'clear-menu');
     }
   };
 
@@ -564,7 +987,7 @@ const MenuManagement = () => {
                   )}
                 </div>
               )}
-              {item.is_dish_of_day === 1 && (
+              {item.is_dish_of_day && (
                 <span className="absolute top-2 left-2 bg-emerald-500 text-white text-[10px] font-bold uppercase px-2 py-1 rounded-full">Prato do Dia</span>
               )}
             </div>
@@ -721,31 +1144,34 @@ const EmployeeManagement = () => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
 
-  const deleteEmployee = async (id: number) => {
-    if (!confirm('Remover este funcionário?')) return;
-    await fetch(`/api/employees/${id}`, { method: 'DELETE' });
-    fetchEmployees();
-  };
+  useEffect(() => {
+    const q = query(collection(db, 'employees'), orderBy('name'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Employee));
+      setEmployees(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'employees');
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const fetchEmployees = () => 
-    fetch('/api/employees')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch employees');
-        return res.json();
-      })
-      .then(setEmployees)
-      .catch(err => console.error('Employees fetch error:', err));
-  useEffect(() => { fetchEmployees(); }, []);
+  const deleteEmployee = async (id: string) => {
+    if (!confirm('Remover este funcionário?')) return;
+    try {
+      await deleteDoc(doc(db, 'employees', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `employees/${id}`);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch('/api/employees', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, role })
-    });
-    setName(''); setRole('');
-    fetchEmployees();
+    try {
+      await addDoc(collection(db, 'employees'), { name, role });
+      setName(''); setRole('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'employees');
+    }
   };
 
   return (
@@ -802,58 +1228,50 @@ const TableManagement = () => {
     orders: Order[];
     total: number;
   } | null>(null);
-  const [showMenuModal, setShowMenuModal] = useState<number | null>(null);
+  const [showMenuModal, setShowMenuModal] = useState<string | 'counter' | null>(null);
+  const [qrModalTable, setQrModalTable] = useState<Table | null>(null);
 
-  const fetchTables = () => 
-    fetch('/api/tables')
-      .then(res => res.json())
-      .then(setTables)
-      .catch(err => console.error('Tables fetch error:', err));
-
-  useEffect(() => { 
-    fetchTables();
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'TABLE_UPDATED' || data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
-        fetchTables();
-        if (selectedTableRef.current && (
-          data.type === 'NEW_ORDER' || 
-          data.type === 'ORDER_UPDATED' || 
-          (data.type === 'TABLE_UPDATED' && typeof selectedTableRef.current !== 'string' && parseInt(data.id) === selectedTableRef.current.id) ||
-          (data.type === 'ORDER_UPDATED' && selectedTableRef.current === 'counter' && data.id === 'counter')
-        )) {
-          fetchTableOrders(selectedTableRef.current === 'counter' ? 'counter' : selectedTableRef.current.id);
-        }
-      }
-    };
-    return () => ws.close();
+  useEffect(() => {
+    const q = query(collection(db, 'tables'), orderBy('number'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Table));
+      setTables(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'tables');
+    });
+    return () => unsubscribe();
   }, []);
 
-  const selectedTableRef = useRef<Table | 'counter' | null>(null);
   useEffect(() => {
-    selectedTableRef.current = selectedTable;
+    if (!selectedTable) {
+      setTableOrders([]);
+      return;
+    }
+
+    setLoadingOrders(true);
+    const tableId = selectedTable === 'counter' ? 'counter' : selectedTable.id;
+    const q = query(
+      collection(db, 'orders'),
+      where('table_id', '==', tableId),
+      where('status', '!=', 'paid'),
+      orderBy('status'),
+      orderBy('created_at', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setTableOrders(data.filter(o => o.status !== 'canceled'));
+      setLoadingOrders(false);
+    }, (err) => {
+      setLoadingOrders(false);
+      handleFirestoreError(err, OperationType.LIST, 'orders');
+    });
+
+    return () => unsubscribe();
   }, [selectedTable]);
 
-  const fetchTableOrders = async (tableId: number | 'counter') => {
-    setLoadingOrders(true);
-    try {
-      const url = tableId === 'counter' ? '/api/counter/orders' : `/api/tables/${tableId}/orders`;
-      const res = await fetch(url);
-      const data = await res.json();
-      setTableOrders(data);
-    } catch (err) {
-      console.error('Error fetching table orders:', err);
-    } finally {
-      setLoadingOrders(false);
-    }
-  };
-
-  const handleTableClick = async (table: Table | 'counter') => {
+  const handleTableClick = (table: Table | 'counter') => {
     setSelectedTable(table);
-    fetchTableOrders(table === 'counter' ? 'counter' : table.id);
   };
 
   const closeBill = async () => {
@@ -870,13 +1288,21 @@ const TableManagement = () => {
     if (!confirmClose) return;
 
     try {
-      const url = isCounter ? '/api/counter/close' : `/api/tables/${selectedTable.id}/close`;
-      console.log(`Closing bill for ${label} via ${url}`);
-      const res = await fetch(url, { method: 'POST' });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Erro ao fechar conta');
+      const batch = writeBatch(db);
+      
+      // Mark all orders as paid
+      tableOrders.forEach(order => {
+        const orderRef = doc(db, 'orders', order.id);
+        batch.update(orderRef, { status: 'paid' });
+      });
+
+      // Update table status
+      if (!isCounter) {
+        const tableRef = doc(db, 'tables', selectedTable.id);
+        batch.update(tableRef, { status: 'available' });
       }
+
+      await batch.commit();
 
       if (tableOrders.length > 0) {
         setShowReceipt({
@@ -887,137 +1313,147 @@ const TableManagement = () => {
       }
 
       setSelectedTable(null);
-      fetchTables();
     } catch (err: any) {
-      console.error('Error closing bill:', err);
-      alert(`Erro ao fechar conta: ${err.message}`);
+      handleFirestoreError(err, OperationType.WRITE, 'close-bill');
     }
   };
 
-  const cancelOrder = async (id: number) => {
+  const cancelOrder = async (id: string) => {
     if (!confirm('Tem certeza que deseja cancelar este pedido?')) return;
     try {
-      console.log(`Canceling order #${id}`);
-      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Erro ao cancelar pedido');
-      }
-      
-      const tableId = selectedTable === 'counter' ? 'counter' : selectedTable!.id;
-      fetchTableOrders(tableId);
-      fetchTables();
+      await updateDoc(doc(db, 'orders', id), { status: 'canceled' });
     } catch (err: any) {
-      console.error('Cancel order error:', err);
-      alert(`Erro ao cancelar pedido: ${err.message}`);
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
     }
   };
 
   const closeOrder = async (order: Order) => {
     if (!confirm(`Fechar pedido #${order.id}?`)) return;
     try {
-      console.log(`Closing individual order #${order.id}`);
-      const res = await fetch(`/api/orders/${order.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'paid' })
-      });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Erro ao fechar pedido');
-      }
+      await updateDoc(doc(db, 'orders', order.id), { status: 'paid' });
       
       setShowReceipt({
-        tableNumber: selectedTable === 'counter' ? 'Balcão' : selectedTable!.number,
+        tableNumber: selectedTable === 'counter' ? 'Balcão' : (selectedTable as Table).number,
         orders: [order],
         total: order.total_price
       });
-      
-      const tableId = selectedTable === 'counter' ? 'counter' : selectedTable!.id;
-      fetchTableOrders(tableId);
-      fetchTables();
     } catch (err: any) {
-      console.error('Error closing order:', err);
-      alert(`Erro ao fechar pedido: ${err.message}`);
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${order.id}`);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch('/api/tables', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ number: parseInt(number) })
-    });
-    setNumber('');
-    fetchTables();
+    try {
+      await addDoc(collection(db, 'tables'), { 
+        number: parseInt(number),
+        status: 'available'
+      });
+      setNumber('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'tables');
+    }
   };
 
-  const deleteTable = async (e: React.MouseEvent, id: number) => {
+  const deleteTable = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!confirm('Tem certeza que deseja remover esta mesa permanentemente?')) return;
-    const res = await fetch(`/api/tables/${id}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const data = await res.json();
-      alert(data.error || 'Erro ao remover mesa');
+    try {
+      await deleteDoc(doc(db, 'tables', id));
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.DELETE, `tables/${id}`);
     }
-    fetchTables();
   };
 
   const tableTotal = tableOrders.reduce((sum, order) => sum + order.total_price, 0);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-1 bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-fit">
-        <h3 className="text-xl font-bold mb-6">Cadastrar Mesa</h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <input 
-            type="number" placeholder="Número da Mesa" 
-            className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
-            value={number} onChange={e => setNumber(e.target.value)} required
-          />
-          <button className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold">Adicionar</button>
-        </form>
-      </div>
-      <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
-        <button 
-          onClick={() => handleTableClick('counter')}
-          className={cn(
-            "bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
-            selectedTable === 'counter' && "border-stone-900 ring-1 ring-stone-900"
-          )}
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-3xl border border-stone-100 shadow-sm">
+        <div>
+          <h2 className="text-2xl font-bold italic">Roteiro do Salão</h2>
+          <p className="text-stone-500 text-sm">Gerencie o layout físico das mesas, imprima QR codes de atendimento ou acompanhe os extratos.</p>
+        </div>
+        <button
+          onClick={() => {
+            const tableNum = prompt("Aponte o leitor de QR Code ou digite o número da mesa para abrir:");
+            if (tableNum) {
+              const matched = tables.find(t => t.number.toString() === tableNum.trim());
+              if (matched) {
+                handleTableClick(matched);
+              } else {
+                alert(`Mesa ${tableNum} não cadastrada no sistema.`);
+              }
+            }
+          }}
+          className="bg-emerald-600 text-white px-5 py-3 rounded-full font-bold text-sm hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-md shadow-emerald-50"
         >
-          <div className="bg-stone-900 p-3 rounded-full text-white mb-1">
-            <Coffee size={24} />
-          </div>
-          <span className="font-bold text-xl">Balcão</span>
-          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
-            Pedidos Diretos
-          </span>
+          <QrCode size={18} /> Escanear Mesa (QR)
         </button>
+      </div>
 
-        {tables.map(table => (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-1 bg-white p-8 rounded-3xl border border-stone-100 shadow-sm h-fit">
+          <h3 className="text-xl font-bold mb-6">Cadastrar Mesa</h3>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <input 
+              type="number" placeholder="Número da Mesa" 
+              className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900"
+              value={number} onChange={e => setNumber(e.target.value)} required
+            />
+            <button className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold">Adicionar</button>
+          </form>
+        </div>
+        <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
           <button 
-            key={table.id} 
-            onClick={() => handleTableClick(table)}
-            className="bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group"
+            onClick={() => handleTableClick('counter')}
+            className={cn(
+              "bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
+              selectedTable === 'counter' && "border-stone-900 ring-1 ring-stone-900"
+            )}
           >
-            <button 
-              onClick={(e) => deleteTable(e, table.id)}
-              className="absolute top-2 right-2 p-2 text-stone-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-            >
-              <Trash2 size={14} />
-            </button>
-            <TableIcon size={32} className={cn(table.status === 'available' ? "text-stone-300" : "text-red-400")} />
-            <span className="font-bold text-xl">Mesa {table.number}</span>
-            <span className={cn(
-              "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
-              table.status === 'available' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-            )}>
-              {table.status === 'available' ? 'Disponível' : 'Ocupada'}
+            <div className="bg-stone-900 p-3 rounded-full text-white mb-1">
+              <Coffee size={24} />
+            </div>
+            <span className="font-bold text-xl">Balcão</span>
+            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
+              Pedidos Diretos
             </span>
           </button>
-        ))}
+
+          {tables.map(table => (
+            <button 
+              key={table.id} 
+              onClick={() => handleTableClick(table)}
+              className="bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm"
+            >
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQrModalTable(table);
+                }}
+                className="absolute top-2 left-2 p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-50 rounded-lg transition-all"
+                title="QR Code da Mesa"
+              >
+                <QrCode size={16} />
+              </button>
+              <button 
+                onClick={(e) => deleteTable(e, table.id)}
+                className="absolute top-2 right-2 p-1.5 text-stone-300 hover:text-red-500 hover:bg-stone-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <Trash2 size={14} />
+              </button>
+              <TableIcon size={32} className={cn(table.status === 'available' ? "text-stone-300" : "text-red-400")} />
+              <span className="font-bold text-xl">Mesa {table.number}</span>
+              <span className={cn(
+                "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                table.status === 'available' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+              )}>
+                {table.status === 'available' ? 'Disponível' : 'Ocupada'}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <AnimatePresence>
@@ -1106,17 +1542,29 @@ const TableManagement = () => {
                     <span className="text-2xl font-bold text-stone-900">R$ {tableTotal.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={() => setShowMenuModal(selectedTable === 'counter' ? -1 : selectedTable!.id)}
-                      className="flex-1 bg-stone-100 text-stone-900 py-5 rounded-full font-bold text-lg hover:bg-stone-200 transition-all flex items-center justify-center gap-2"
-                    >
-                      <PlusCircle size={24} /> Novo Pedido
-                    </button>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex gap-3">
+                      <button 
+                        onClick={() => setShowMenuModal(selectedTable === 'counter' ? 'counter' : selectedTable!.id)}
+                        className="flex-1 bg-stone-100 text-stone-900 py-4 rounded-full font-bold text-sm hover:bg-stone-200 transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <PlusCircle size={18} /> Novo Pedido
+                      </button>
+                      
+                      {tableOrders.length > 0 && (
+                        <button 
+                          onClick={() => handlePrintReceipt(selectedTable === 'counter' ? 'Balcão' : `Mesa ${selectedTable.number}`, tableOrders, tableTotal)}
+                          className="flex-1 bg-amber-50 text-amber-700 border border-amber-200/50 py-4 rounded-full font-bold text-sm hover:bg-amber-100 transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <Printer size={18} /> Comprovante
+                        </button>
+                      )}
+                    </div>
+                    
                     <button 
                       onClick={closeBill}
                       className={cn(
-                        "flex-[2] py-5 rounded-full font-bold text-lg transition-all shadow-xl flex items-center justify-center gap-2",
+                        "w-full py-4 rounded-full font-bold text-base transition-all shadow-xl flex items-center justify-center gap-2",
                         tableOrders.length > 0 
                           ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
                           : "bg-stone-200 text-stone-600 hover:bg-stone-300 shadow-stone-100"
@@ -1124,11 +1572,11 @@ const TableManagement = () => {
                     >
                       {tableOrders.length > 0 ? (
                         <>
-                          <CheckCircle2 size={24} /> Fechar Conta
+                          <CheckCircle2 size={22} /> Fechar Conta
                         </>
                       ) : (
                         <>
-                          <X size={24} /> Liberar Mesa
+                          <X size={22} /> Liberar Mesa
                         </>
                       )}
                     </button>
@@ -1180,12 +1628,20 @@ const TableManagement = () => {
                 <span className="text-3xl font-bold text-stone-900">R$ {showReceipt.total.toFixed(2)}</span>
               </div>
 
-              <button 
-                onClick={() => setShowReceipt(null)}
-                className="w-full bg-stone-900 text-white py-5 rounded-full font-bold text-lg hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
-              >
-                Concluir
-              </button>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => handlePrintReceipt(showReceipt.tableNumber === 'Balcão' ? 'Balcão' : `Mesa ${showReceipt.tableNumber}`, showReceipt.orders, showReceipt.total)}
+                  className="flex-1 border-2 border-stone-950 text-stone-950 py-4 rounded-full font-bold text-sm hover:bg-stone-50 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Printer size={18} /> Imprimir
+                </button>
+                <button 
+                  onClick={() => setShowReceipt(null)}
+                  className="flex-1 bg-stone-900 text-white py-4 rounded-full font-bold text-sm hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
+                >
+                  Concluir
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -1198,9 +1654,102 @@ const TableManagement = () => {
               initialTableId={showMenuModal} 
               onClose={() => {
                 setShowMenuModal(null);
-                if (selectedTable) fetchTableOrders(selectedTable === 'counter' ? 'counter' : selectedTable.id);
               }} 
             />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* QR Code Modal */}
+      <AnimatePresence>
+        {qrModalTable && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl relative text-center overflow-hidden"
+            >
+              <button 
+                onClick={() => setQrModalTable(null)}
+                className="absolute top-6 right-6 text-stone-400 hover:text-stone-900 transition-colors"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="mb-6">
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-full">
+                  QR Code de Mesa
+                </span>
+                <h3 className="text-3xl font-bold italic mt-3 text-stone-900">Mesa {qrModalTable.number}</h3>
+              </div>
+
+              <div className="bg-stone-50 p-6 rounded-[32px] border border-stone-100 shadow-inner flex items-center justify-center mx-auto w-60 h-60 mb-6">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?table=${qrModalTable.number}`)}`}
+                  alt={`QR Code Mesa ${qrModalTable.number}`}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+
+              <p className="text-stone-500 text-[11px] mb-8 leading-relaxed max-w-xs mx-auto">
+                Aponte a câmera para abrir esta mesa de forma rápida e segura no seu dispositivo de atendimento.
+              </p>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={() => {
+                    handleTableClick(qrModalTable);
+                    setQrModalTable(null);
+                  }}
+                  className="w-full bg-stone-900 text-white py-4 rounded-full font-bold text-sm hover:bg-stone-800 transition-all flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <TableIcon size={18} /> Abrir no Painel
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?table=${qrModalTable.number}`)}`;
+                    const printW = window.open('', '_blank');
+                    if (!printW) return;
+                    printW.document.write(`
+                      <html>
+                        <head>
+                          <title>QR Code - Mesa ${qrModalTable.number}</title>
+                          <style>
+                            body { font-family: sans-serif; text-align: center; padding: 40px; color: #1c1917; }
+                            .card { border: 3px solid #1c1917; padding: 40px; border-radius: 20px; display: inline-block; max-width: 320px; }
+                            h1 { font-family: serif; font-size: 2.2em; margin: 0 0 5px 0; font-style: italic; font-weight: bold; }
+                            p { font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; color: #78716c; margin-bottom: 20px; }
+                            .table-num { font-size: 1.8em; font-weight: 900; margin-top: 15px; }
+                            .instructions { font-size: 0.75em; color: #a8a29e; margin-top: 15px; text-transform: uppercase; letter-spacing: 1px; }
+                          </style>
+                        </head>
+                        <body>
+                          <div class="card">
+                            <h1>Sabor Caseiro</h1>
+                            <p>Faça seu Pedido Online</p>
+                            <img src="${qrUrl}" style="width: 240px; height: 240px;" />
+                            <div class="table-num">MESA ${qrModalTable.number}</div>
+                            <div class="instructions">Escaneie o QR Code com<br/>a câmera do seu celular</div>
+                          </div>
+                          <script>
+                            window.onload = () => {
+                              window.print();
+                              setTimeout(() => window.close(), 500);
+                            };
+                          </script>
+                        </body>
+                      </html>
+                    `);
+                    printW.document.close();
+                  }}
+                  className="w-full bg-stone-100 hover:bg-stone-200 text-stone-900 border border-stone-200 py-4 rounded-full font-bold text-sm transition-all flex items-center justify-center gap-2"
+                >
+                  <Printer size={18} /> Imprimir QR Code de Mesa
+                </button>
+              </div>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>
@@ -1216,30 +1765,30 @@ const AddonManagement = () => {
   const [price, setPrice] = useState('');
   const [editingAddon, setEditingAddon] = useState<Addon | null>(null);
 
-  const fetchAddons = () => 
-    fetch('/api/addons')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch addons');
-        return res.json();
-      })
-      .then(setAddons)
-      .catch(err => console.error('Addons fetch error:', err));
-  
-  useEffect(() => { fetchAddons(); }, []);
+  useEffect(() => {
+    const q = query(collection(db, 'addons'), orderBy('name'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Addon));
+      setAddons(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'addons');
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const url = editingAddon ? `/api/addons/${editingAddon.id}` : '/api/addons';
-    const method = editingAddon ? 'PATCH' : 'POST';
-
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, price: parseFloat(price) })
-    });
-    
-    cancelEdit();
-    fetchAddons();
+    try {
+      const addonData = { name, price: parseFloat(price) };
+      if (editingAddon) {
+        await updateDoc(doc(db, 'addons', editingAddon.id), addonData);
+      } else {
+        await addDoc(collection(db, 'addons'), addonData);
+      }
+      cancelEdit();
+    } catch (err) {
+      handleFirestoreError(err, editingAddon ? OperationType.UPDATE : OperationType.CREATE, editingAddon ? `addons/${editingAddon.id}` : 'addons');
+    }
   };
 
   const handleEdit = (addon: Addon) => {
@@ -1254,11 +1803,14 @@ const AddonManagement = () => {
     setPrice('');
   };
 
-  const deleteAddon = async (e: React.MouseEvent, id: number) => {
+  const deleteAddon = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (confirm('Remover este adicional?')) {
-      await fetch(`/api/addons/${id}`, { method: 'DELETE' });
-      fetchAddons();
+      try {
+        await deleteDoc(doc(db, 'addons', id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `addons/${id}`);
+      }
     }
   };
 
@@ -1266,16 +1818,21 @@ const AddonManagement = () => {
     if (!confirm('ATENÇÃO: Isso apagará TODOS os produtos e adicionais cadastrados, além de todos os pedidos existentes. Esta ação não pode ser desfeita. Deseja continuar?')) return;
     
     try {
-      const res = await fetch('/api/system/clear-menu', { method: 'POST' });
-      if (res.ok) {
-        alert('Cardápio limpo com sucesso!');
-        fetchAddons();
-      } else {
-        throw new Error('Falha ao limpar cardápio');
-      }
+      const batch = writeBatch(db);
+      
+      const itemsSnap = await getDocs(collection(db, 'items'));
+      itemsSnap.forEach(d => batch.delete(d.ref));
+      
+      const addonsSnap = await getDocs(collection(db, 'addons'));
+      addonsSnap.forEach(d => batch.delete(d.ref));
+      
+      const ordersSnap = await getDocs(collection(db, 'orders'));
+      ordersSnap.forEach(d => batch.delete(d.ref));
+      
+      await batch.commit();
+      alert('Cardápio limpo com sucesso!');
     } catch (err) {
-      console.error('Clear menu error:', err);
-      alert('Erro ao limpar cardápio.');
+      handleFirestoreError(err, OperationType.WRITE, 'clear-menu-addons');
     }
   };
 
@@ -1365,25 +1922,26 @@ const DeliveryManagement = () => {
     total: number;
   } | null>(null);
 
-  const fetchOrders = () => {
-    setLoading(true);
-    fetch('/api/delivery/orders')
-      .then(res => res.json())
-      .then(setOrders)
-      .finally(() => setLoading(false));
-  };
-
   useEffect(() => {
-    fetchOrders();
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED') {
-        fetchOrders();
-      }
-    };
-    return () => ws.close();
+    setLoading(true);
+    const q = query(
+      collection(db, 'orders'),
+      where('table_id', '==', -2),
+      where('status', '!=', 'paid'),
+      orderBy('status'),
+      orderBy('created_at', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setOrders(data.filter(o => o.status !== 'canceled'));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const closeAll = async () => {
@@ -1394,44 +1952,34 @@ const DeliveryManagement = () => {
       const total = orders.reduce((sum, o) => sum + o.total_price, 0);
       const ordersToReceipt = [...orders];
 
-      const res = await fetch('/api/delivery/close', { method: 'POST' });
-      if (!res.ok) throw new Error('Erro ao fechar contas');
+      const batch = writeBatch(db);
+      orders.forEach(order => {
+        batch.update(doc(db, 'orders', order.id), { status: 'paid' });
+      });
+      await batch.commit();
       
       setShowReceipt({ orders: ordersToReceipt, total });
-      fetchOrders();
     } catch (err: any) {
-      console.error('Error closing all delivery:', err);
-      alert(`Erro: ${err.message}`);
+      handleFirestoreError(err, OperationType.WRITE, 'close-all-delivery');
     }
   };
 
-  const cancelOrder = async (id: number) => {
+  const cancelOrder = async (id: string) => {
     if (!confirm('Cancelar este pedido de delivery?')) return;
     try {
-      const res = await fetch(`/api/orders/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Erro ao cancelar pedido');
-      fetchOrders();
+      await updateDoc(doc(db, 'orders', id), { status: 'canceled' });
     } catch (err: any) {
-      console.error('Error canceling delivery:', err);
-      alert(`Erro: ${err.message}`);
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
     }
   };
 
   const closeOrder = async (order: Order) => {
     if (!confirm(`Fechar pedido #${order.id}?`)) return;
     try {
-      const res = await fetch(`/api/orders/${order.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'paid' })
-      });
-      if (!res.ok) throw new Error('Erro ao fechar pedido');
-      
+      await updateDoc(doc(db, 'orders', order.id), { status: 'paid' });
       setShowReceipt({ orders: [order], total: order.total_price });
-      fetchOrders();
     } catch (err: any) {
-      console.error('Error closing delivery order:', err);
-      alert(`Erro: ${err.message}`);
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${order.id}`);
     }
   };
 
@@ -1489,6 +2037,22 @@ const DeliveryManagement = () => {
                 </span>
               </div>
 
+              {order.delivery_info && (
+                <div className="bg-stone-50 p-3 rounded-2xl space-y-1 border border-stone-100">
+                  <div className="flex items-center gap-2 text-stone-900">
+                    <Users size={12} className="text-stone-400" />
+                    <p className="text-xs font-bold">{order.delivery_info.name || 'Cliente'}</p>
+                  </div>
+                  <div className="flex items-center gap-2 text-stone-600">
+                    <Truck size={12} className="text-stone-400" />
+                    <p className="text-[10px] leading-tight">{order.delivery_info.address || 'Endereço não informado'}</p>
+                  </div>
+                  {order.delivery_info.phone && (
+                    <p className="text-[10px] text-stone-400 ml-5">{order.delivery_info.phone}</p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
                 {order.items.map((item, idx) => (
                   <div key={idx} className="flex justify-between text-sm">
@@ -1501,6 +2065,13 @@ const DeliveryManagement = () => {
               <div className="pt-4 border-t border-stone-100 flex justify-between items-center">
                 <span className="font-bold text-lg">R$ {order.total_price.toFixed(2)}</span>
                 <div className="flex gap-2">
+                  <button 
+                    onClick={() => handlePrint(order)}
+                    className="bg-stone-50 text-stone-600 hover:bg-stone-100 p-2 rounded-lg transition-colors"
+                    title="Imprimir Pedido"
+                  >
+                    <Printer size={18} />
+                  </button>
                   <button 
                     onClick={() => closeOrder(order)}
                     className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 p-2 rounded-lg transition-colors"
@@ -1529,7 +2100,6 @@ const DeliveryManagement = () => {
               initialTableId={-2} 
               onClose={() => {
                 setShowMenuModal(false);
-                fetchOrders();
               }} 
             />
           </div>
@@ -1557,12 +2127,20 @@ const DeliveryManagement = () => {
                 <span className="text-lg font-bold uppercase tracking-widest">Total Pago</span>
                 <span className="text-3xl font-bold text-stone-900">R$ {showReceipt.total.toFixed(2)}</span>
               </div>
-              <button 
-                onClick={() => setShowReceipt(null)}
-                className="w-full bg-stone-900 text-white py-5 rounded-full font-bold text-lg hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
-              >
-                Concluir
-              </button>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => handlePrintReceipt('DELIVERY', showReceipt.orders, showReceipt.total)}
+                  className="flex-1 border-2 border-stone-950 text-stone-950 py-4 rounded-full font-bold text-sm hover:bg-stone-50 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Printer size={18} /> Imprimir
+                </button>
+                <button 
+                  onClick={() => setShowReceipt(null)}
+                  className="flex-1 bg-stone-900 text-white py-4 rounded-full font-bold text-sm hover:bg-stone-800 transition-all shadow-xl shadow-stone-200"
+                >
+                  Concluir
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -1642,12 +2220,11 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
   );
 };
 
-const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder, handlePrint }: { 
+const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder }: { 
   order: Order, 
   kitchenTab: 'active' | 'history', 
-  updateStatus: (id: number, status: string) => void, 
-  deleteOrder: (id: number) => void, 
-  handlePrint: (order: Order) => void 
+  updateStatus: (id: string, status: string) => void, 
+  deleteOrder: (id: string) => void
 }) => (
   <motion.div 
     layout
@@ -1663,13 +2240,13 @@ const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder, handle
     <div className="flex justify-between items-start mb-6">
       <div>
         <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
-          {order.type === 'delivery' ? 'Delivery' : (order.table_number ? 'Mesa' : 'Local')}
+          {order.type === 'delivery' ? 'Delivery' : (order.type === 'counter' ? 'Balcão' : 'Mesa')}
         </span>
         <p className={cn(
           "text-3xl font-bold",
-          order.type === 'delivery' ? "text-emerald-400" : (!order.table_number && "text-blue-400")
+          order.type === 'delivery' ? "text-emerald-400" : (order.type === 'counter' && "text-blue-400")
         )}>
-          {order.type === 'delivery' ? 'Entrega' : (order.table_number || 'Balcão')}
+          {order.type === 'delivery' ? 'Delivery' : (order.type === 'counter' ? 'Balcão' : order.table_number)}
         </p>
       </div>
       <div className="text-right">
@@ -1697,6 +2274,16 @@ const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder, handle
           )}
         </div>
       </div>
+      
+      {order.delivery_info && (
+        <div className="mt-4 bg-stone-900/50 p-3 rounded-2xl border border-stone-700/50 space-y-1">
+          <p className="text-xs font-bold text-emerald-400">{order.delivery_info.name}</p>
+          <p className="text-[10px] text-stone-400 leading-tight">{order.delivery_info.address}</p>
+          {order.delivery_info.phone && (
+            <p className="text-[10px] text-stone-500">{order.delivery_info.phone}</p>
+          )}
+        </div>
+      )}
     </div>
 
     <div className="flex-1 space-y-3 mb-8">
@@ -1781,7 +2368,6 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   const [kitchenTab, setKitchenTab] = useState<'active' | 'history'>('active');
   const [historyFilter, setHistoryFilter] = useState<'day' | 'week'>('day');
   const [showNotification, setShowNotification] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const audioEnabledRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1790,136 +2376,47 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     audioEnabledRef.current = audioEnabled;
   }, [audioEnabled]);
 
-  const fetchOrders = () => {
-    const statusFilter = kitchenTab === 'active' ? 'active' : '';
-    fetch(`/api/orders?status=${statusFilter}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch orders');
-        return res.json();
-      })
-      .then(data => {
-        if (kitchenTab === 'history') {
-          // Additional client-side filtering for history if needed
-          const filtered = data.filter((o: Order) => {
-            if (o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled') return false;
-            const orderDate = new Date(o.created_at);
-            const now = new Date();
-            if (historyFilter === 'day') {
-              return orderDate.toDateString() === now.toDateString();
-            } else {
-              const oneWeekAgo = new Date();
-              oneWeekAgo.setDate(now.getDate() - 7);
-              return orderDate >= oneWeekAgo;
-            }
-          });
-          setOrders(filtered);
-        } else {
-          setOrders(data);
-        }
-      })
-      .catch(err => {
-        console.error('Orders fetch error:', err);
-        alert('Erro ao carregar pedidos da cozinha.');
-      });
-  };
-
   useEffect(() => {
-    fetchOrders();
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let ws: WebSocket;
-    let reconnectTimer: any;
-
-    const connect = () => {
-      ws = new WebSocket(`${protocol}//${window.location.host}`);
+    const q = query(collection(db, 'orders'), orderBy('created_at', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
       
-      ws.onopen = () => {
-        setIsConnected(true);
-        console.log('Conectado ao servidor de pedidos em tempo real');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('Mensagem recebida:', data.type);
-          if (data.type === 'NEW_ORDER' || data.type === 'ORDER_UPDATED' || data.type === 'SYSTEM_RESET' || data.type === 'MENU_CLEARED') {
-            fetchOrders();
-            
-            if (data.type === 'NEW_ORDER') {
-              setShowNotification(true);
-              if (audioEnabledRef.current && audioRef.current) {
-                audioRef.current.play().catch(e => console.log('Audio play blocked:', e));
-              }
-              setTimeout(() => setShowNotification(false), 8000); // Increased notification time
-            }
+      // Check for new orders to show notification
+      const lastOrder = data[0];
+      if (lastOrder && lastOrder.status === 'pending') {
+        const orderTime = new Date(lastOrder.created_at).getTime();
+        const now = new Date().getTime();
+        if (now - orderTime < 10000) { // If order is less than 10 seconds old
+          setShowNotification(true);
+          if (audioEnabledRef.current && audioRef.current) {
+            audioRef.current.play().catch(e => console.log('Audio play blocked:', e));
           }
-        } catch (e) {
-          console.error('WS message error:', e);
+          setTimeout(() => setShowNotification(false), 8000);
         }
-      };
+      }
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        console.log('WS connection closed, reconnecting...');
-        reconnectTimer = setTimeout(connect, 2000);
-      };
-
-      ws.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        ws.close();
-      };
-    };
-
-    connect();
-
-    return () => {
-      if (ws) ws.close();
-      clearTimeout(reconnectTimer);
-    };
+      setOrders(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+    });
+    return () => unsubscribe();
   }, []);
 
-  const updateStatus = async (id: number, status: string) => {
-    await fetch(`/api/orders/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    fetchOrders();
+  const updateStatus = async (id: string, status: string) => {
+    try {
+      await updateDoc(doc(db, 'orders', id), { status });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${id}`);
+    }
   };
 
-  const deleteOrder = async (id: number) => {
+  const deleteOrder = async (id: string) => {
     if (!confirm('Tem certeza que deseja excluir este pedido permanentemente?')) return;
-    await fetch(`/api/orders/${id}`, { method: 'DELETE' });
-    fetchOrders();
-  };
-
-  const handlePrint = (order: Order) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <html>
-        <head><title>Pedido #${order.id}</title></head>
-        <body style="font-family: monospace; padding: 20px;">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <h2 style="margin: 0;">PEDIDO #${order.id}</h2>
-            <span>${new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-          </div>
-          <p style="font-weight: bold; font-size: 1.2em;">${order.table_number ? `MESA: ${order.table_number}` : 'RETIRADA NO BALCÃO'}</p>
-          <hr/>
-          ${order.items.map(item => `
-            <div style="margin-bottom: 10px;">
-              <p style="margin: 0; font-weight: bold;">${item.quantity}x ${item.name}</p>
-              ${item.observation ? `<p style="margin: 0; font-size: 0.8em; color: #666;">Obs: ${item.observation}</p>` : ''}
-              ${item.addons && item.addons.length > 0 ? `<p style="margin: 0; font-size: 0.8em; color: #22c55e;">+ ${item.addons.map(a => a.name).join(', ')}</p>` : ''}
-            </div>
-          `).join('')}
-          <hr/>
-          <p>TOTAL: R$ ${order.total_price.toFixed(2)}</p>
-          <script>window.print(); window.close();</script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    try {
+      await deleteDoc(doc(db, 'orders', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `orders/${id}`);
+    }
   };
 
   const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled');
@@ -1991,9 +2488,9 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
             <div>
               <h1 className="text-3xl font-bold">Cozinha</h1>
               <div className="flex items-center gap-2">
-                <div className={cn("w-2 h-2 rounded-full animate-pulse", isConnected ? "bg-emerald-500" : "bg-red-500")} />
+                <div className="w-2 h-2 rounded-full animate-pulse bg-emerald-500" />
                 <span className="text-[10px] uppercase tracking-widest font-bold text-stone-500">
-                  {isConnected ? 'Live' : 'Desconectado'}
+                  Firebase Online
                 </span>
               </div>
             </div>
@@ -2081,7 +2578,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.table.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -2098,7 +2595,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.counter.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -2115,7 +2612,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.delivery.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -2133,7 +2630,7 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             <AnimatePresence mode="popLayout">
               {displayOrders.map(order => (
-                <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} handlePrint={handlePrint} />
+                <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
               ))}
             </AnimatePresence>
           </div>
@@ -2143,10 +2640,10 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   );
 };
 
-const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | null, onClose?: () => void }) => {
+const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initialTableId?: string | number | null, onClose?: () => void, user?: FirebaseUser | null, onViewChange?: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
   const [items, setItems] = useState<Item[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
-  const [selectedTable, setSelectedTable] = useState<number | null>(initialTableId ?? null);
+  const [selectedTable, setSelectedTable] = useState<string | number | null>(initialTableId ?? null);
   const [cart, setCart] = useState<{
     item: Item, 
     quantity: number, 
@@ -2162,20 +2659,50 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
   const [itemObservation, setItemObservation] = useState('');
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([]);
   const [tableSearch, setTableSearch] = useState('');
+  const [deliveryName, setDeliveryName] = useState('');
+  const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
 
   useEffect(() => {
-    fetch('/api/items')
-      .then(res => res.json())
-      .then(setItems)
-      .catch(err => console.error('Menu items fetch error:', err));
-    fetch('/api/tables')
-      .then(res => res.json())
-      .then(setTables)
-      .catch(err => console.error('Menu tables fetch error:', err));
-    fetch('/api/addons')
-      .then(res => res.json())
-      .then(setAddons)
-      .catch(err => console.error('Menu addons fetch error:', err));
+    if (initialTableId && tables.length > 0) {
+      if (typeof initialTableId === 'number' || !isNaN(Number(initialTableId))) {
+        const matched = tables.find(t => t.number === Number(initialTableId));
+        if (matched) {
+          setSelectedTable(matched.id);
+          setTableSearch(matched.number.toString());
+        }
+      } else {
+        const matched = tables.find(t => t.id === initialTableId);
+        if (matched) {
+          setSelectedTable(matched.id);
+          setTableSearch(matched.number.toString());
+        }
+      }
+    }
+  }, [initialTableId, tables]);
+
+  useEffect(() => {
+    const unsubItems = onSnapshot(query(collection(db, 'items'), orderBy('name')), (snapshot) => {
+      setItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'items');
+    });
+    const unsubTables = onSnapshot(query(collection(db, 'tables'), orderBy('number')), (snapshot) => {
+      setTables(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Table)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'tables');
+    });
+    const unsubAddons = onSnapshot(query(collection(db, 'addons'), orderBy('name')), (snapshot) => {
+      setAddons(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Addon)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'addons');
+    });
+
+    return () => {
+      unsubItems();
+      unsubTables();
+      unsubAddons();
+    };
   }, []);
 
   const handleAddToCartClick = (item: Item) => {
@@ -2188,9 +2715,6 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
     if (!customizingItem) return;
 
     setCart(prev => {
-      // We treat items with different observations or addons as different entries in the cart
-      // to keep it simple, or we can just add a new entry every time.
-      // Let's just add a new entry to avoid complex matching.
       return [...prev, { 
         item: customizingItem, 
         quantity: 1, 
@@ -2220,49 +2744,95 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
     return sum + ((itemTotal + addonsTotal) * i.quantity);
   }, 0);
 
-  const sendOrder = async () => {
-    if (selectedTable === null) return alert('Por favor, selecione sua mesa ou retirada no balcão.');
-    
-    setIsSending(true);
-    try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          table_id: (selectedTable === -1 || selectedTable === -2) ? null : selectedTable,
-          type: selectedTable === -2 ? 'delivery' : (selectedTable === -1 ? 'counter' : 'table'),
+    const sendOrder = async () => {
+      if (selectedTable === null) {
+        alert('Por favor, selecione mesa, balcão ou delivery.');
+        return;
+      }
+      
+      if (cart.length === 0) {
+        alert('Seu carrinho está vazio.');
+        return;
+      }
+      
+      if (selectedTable === -2 && (!deliveryName || !deliveryAddress)) {
+        alert('Por favor, preencha seu nome e endereço para entrega.');
+        return;
+      }
+      
+      setIsSending(true);
+      try {
+        const table = typeof selectedTable === 'string' && selectedTable !== 'counter' 
+          ? tables.find(t => t.id === selectedTable) 
+          : null;
+
+        const orderData = {
+          table_id: selectedTable === 'counter' ? 'counter' : (selectedTable === -2 ? -2 : selectedTable),
+          table_number: table ? table.number : null,
+          type: selectedTable === -2 ? 'delivery' : (selectedTable === 'counter' ? 'counter' : 'table'),
+          delivery_info: selectedTable === -2 ? {
+            name: deliveryName,
+            phone: deliveryPhone,
+            address: deliveryAddress
+          } : null,
           items: cart.map(i => ({ 
-            id: i.item.id, 
+            item_id: i.item.id, 
+            name: i.item.name,
             quantity: i.quantity, 
-            price: i.item.price,
-            observation: i.observation,
-            selectedAddons: i.selectedAddons
+            price_at_time: i.item.price,
+            observation: i.observation || '',
+            addons: (i.selectedAddons || []).map(a => ({
+              id: a.id,
+              name: a.name,
+              price_at_time: a.price
+            }))
           })),
-          total_price: total
-        })
-      });
+          total_price: total,
+          status: 'pending',
+          created_at: new Date().toISOString()
+        };
 
-      if (!res.ok) throw new Error('Erro ao enviar pedido');
+        await addDoc(collection(db, 'orders'), orderData);
 
-      setCart([]);
-      setOrderSent(true);
-      setShowCartDetails(false);
-      setTimeout(() => {
-        setOrderSent(false);
-        if (onClose) onClose();
-      }, 3000);
-    } catch (err) {
-      alert('Erro ao enviar pedido. Por favor, tente novamente.');
-      console.error(err);
-    } finally {
-      setIsSending(false);
-    }
-  };
+        // If it's a regular table (not counter or delivery), mark it as occupied
+        if (table) {
+          await updateDoc(doc(db, 'tables', table.id), { status: 'occupied' });
+        }
+
+        setCart([]);
+        setOrderSent(true);
+        setShowCartDetails(false);
+        setTimeout(() => {
+          setOrderSent(false);
+          if (onClose) onClose();
+        }, 3000);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, 'orders');
+        alert('Erro ao enviar pedido. Por favor, verifique sua conexão e tente novamente.');
+      } finally {
+        setIsSending(false);
+      }
+    };
 
   const filteredItems = category === 'all' ? items : items.filter(i => i.category === category);
 
   return (
     <div className="min-h-screen bg-stone-50 font-serif relative overflow-x-hidden">
+      {user && onViewChange && (
+        <div className="relative z-50 bg-emerald-600 text-white px-6 py-3.5 font-sans text-xs flex flex-col sm:flex-row gap-3 justify-between items-center shadow-md">
+          <div className="flex items-center gap-2 font-sans">
+            <span className="w-2 h-2 bg-white rounded-full animate-ping" />
+            <span>Você está logado como <strong>Atendente/Administrador</strong>. Abrindo mesa do cliente.</span>
+          </div>
+          <button 
+            onClick={() => onViewChange('admin')}
+            className="bg-white/20 hover:bg-white/30 text-white px-3.5 py-1.5 rounded-full font-bold transition-all uppercase tracking-widest text-[10px]"
+          >
+            Voltar ao Painel Admin
+          </button>
+        </div>
+      )}
+
       {/* Background Image with Overlay */}
       <div className="fixed inset-0 z-0">
         <img 
@@ -2292,83 +2862,140 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
             <p className="text-stone-500 font-sans text-sm">Selecione sua mesa ou escolha retirada no balcão</p>
           </div>
           
-          <div className="flex flex-col md:flex-row items-center justify-center gap-8">
-            <div className="flex gap-4 w-full md:w-auto">
+          <div className="flex flex-col md:flex-row items-stretch justify-center gap-6">
+            <div className="grid grid-cols-2 gap-4 w-full md:w-auto">
               <button 
-                onClick={() => setSelectedTable(-1)}
+                onClick={() => {
+                  setSelectedTable('counter');
+                  setTableSearch('');
+                }}
                 className={cn(
-                  "flex-1 md:w-auto px-6 py-6 rounded-3xl font-sans font-bold transition-all shadow-lg flex flex-col items-center gap-3 border-2",
-                  selectedTable === -1 
+                  "px-6 py-8 rounded-[32px] font-sans font-bold transition-all shadow-xl flex flex-col items-center justify-center gap-4 border-2",
+                  selectedTable === 'counter' 
                     ? "bg-stone-900 border-stone-900 text-white scale-105 shadow-stone-200" 
-                    : "bg-white border-stone-100 text-stone-400 hover:border-stone-200"
+                    : "bg-white border-stone-100 text-stone-400 hover:border-stone-300 hover:bg-stone-50"
                 )}
               >
-                <Coffee size={32} />
+                <div className={cn(
+                  "w-14 h-14 rounded-2xl flex items-center justify-center transition-colors",
+                  selectedTable === 'counter' ? "bg-white/20" : "bg-stone-100"
+                )}>
+                  <Coffee size={32} />
+                </div>
                 <div className="text-center">
-                  <span className="block text-lg">Balcão</span>
-                  <span className="text-[10px] uppercase tracking-widest opacity-60">Retirada</span>
+                  <span className="block text-xl">Balcão</span>
+                  <span className="text-[10px] uppercase tracking-[0.2em] font-black opacity-60">Retirada</span>
                 </div>
               </button>
 
               <button 
-                onClick={() => setSelectedTable(-2)}
+                onClick={() => {
+                  setSelectedTable(-2);
+                  setTableSearch('');
+                }}
                 className={cn(
-                  "flex-1 md:w-auto px-6 py-6 rounded-3xl font-sans font-bold transition-all shadow-lg flex flex-col items-center gap-3 border-2",
+                  "px-6 py-8 rounded-[32px] font-sans font-bold transition-all shadow-xl flex flex-col items-center justify-center gap-4 border-2",
                   selectedTable === -2 
-                    ? "bg-stone-900 border-stone-900 text-white scale-105 shadow-stone-200" 
-                    : "bg-white border-stone-100 text-stone-400 hover:border-stone-200"
+                    ? "bg-emerald-600 border-emerald-600 text-white scale-105 shadow-emerald-200" 
+                    : "bg-white border-stone-100 text-stone-400 hover:border-emerald-300 hover:bg-emerald-50"
                 )}
               >
-                <Truck size={32} />
+                <div className={cn(
+                  "w-14 h-14 rounded-2xl flex items-center justify-center transition-colors",
+                  selectedTable === -2 ? "bg-white/20" : "bg-emerald-100 text-emerald-600"
+                )}>
+                  <Truck size={32} />
+                </div>
                 <div className="text-center">
-                  <span className="block text-lg">Delivery</span>
-                  <span className="text-[10px] uppercase tracking-widest opacity-60">Entrega</span>
+                  <span className="block text-xl">Delivery</span>
+                  <span className="text-[10px] uppercase tracking-[0.2em] font-black opacity-60">Entrega</span>
                 </div>
               </button>
             </div>
 
-            <div className="hidden md:block w-px h-24 bg-stone-200" />
-            <div className="md:hidden w-full h-px bg-stone-200" />
+            <div className="hidden md:flex items-center">
+              <div className="w-px h-24 bg-stone-200" />
+            </div>
+            <div className="md:hidden w-full h-px bg-stone-200 my-2" />
 
-            <div className="flex-1 w-full">
-              <div className="mb-6">
-                <div className="relative">
-                  <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400" />
-                  <input 
-                    type="number"
-                    placeholder="Digite o número da mesa..."
-                    className="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-stone-100 focus:border-stone-900 focus:ring-0 outline-none font-sans text-lg transition-all"
-                    value={tableSearch}
-                    onChange={e => {
-                      setTableSearch(e.target.value);
-                      const table = tables.find(t => t.number.toString() === e.target.value);
-                      if (table) setSelectedTable(table.id);
-                    }}
-                  />
+            <div className="flex-1 w-full flex flex-col justify-center">
+              {selectedTable === -2 ? (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 ml-2">Nome</label>
+                      <input 
+                        type="text"
+                        placeholder="Seu nome..."
+                        className="w-full px-4 py-3 rounded-2xl border-2 border-stone-100 focus:border-emerald-500 outline-none font-sans text-sm transition-all"
+                        value={deliveryName}
+                        onChange={e => setDeliveryName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 ml-2">Telefone</label>
+                      <input 
+                        type="tel"
+                        placeholder="(00) 00000-0000"
+                        className="w-full px-4 py-3 rounded-2xl border-2 border-stone-100 focus:border-emerald-500 outline-none font-sans text-sm transition-all"
+                        value={deliveryPhone}
+                        onChange={e => setDeliveryPhone(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-stone-400 ml-2">Endereço de Entrega</label>
+                    <textarea 
+                      placeholder="Rua, número, bairro, complemento..."
+                      className="w-full px-4 py-3 rounded-2xl border-2 border-stone-100 focus:border-emerald-500 outline-none font-sans text-sm transition-all resize-none h-20"
+                      value={deliveryAddress}
+                      onChange={e => setDeliveryAddress(e.target.value)}
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="mb-4">
+                    <div className="relative">
+                      <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400" />
+                      <input 
+                        type="number"
+                        placeholder="Número da mesa..."
+                        className="w-full pl-12 pr-4 py-5 rounded-2xl border-2 border-stone-100 focus:border-stone-900 focus:ring-0 outline-none font-sans text-xl transition-all placeholder:text-stone-300"
+                        value={tableSearch}
+                        onChange={e => {
+                          setTableSearch(e.target.value);
+                          const table = tables.find(t => t.number.toString() === e.target.value);
+                          if (table) setSelectedTable(table.id);
+                          else if (e.target.value === '') setSelectedTable(null);
+                        }}
+                      />
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-4 sm:grid-cols-6 gap-3 max-h-[200px] overflow-y-auto p-1">
-                {tables
-                  .filter(t => !tableSearch || t.number.toString().includes(tableSearch))
-                  .map(t => (
-                  <button 
-                    key={t.id}
-                    onClick={() => {
-                      setSelectedTable(t.id);
-                      setTableSearch(t.number.toString());
-                    }}
-                    className={cn(
-                      "aspect-square rounded-2xl font-sans font-bold transition-all shadow-sm flex items-center justify-center text-lg border-2",
-                      selectedTable === t.id 
-                        ? "bg-stone-900 border-stone-900 text-white scale-110 shadow-stone-300 z-10" 
-                        : "bg-white border-stone-50 text-stone-400 hover:bg-stone-50 hover:border-stone-200"
-                    )}
-                  >
-                    {t.number}
-                  </button>
-                ))}
-              </div>
+                  <div className="grid grid-cols-5 sm:grid-cols-6 gap-2 max-h-[160px] overflow-y-auto p-1 custom-scrollbar">
+                    {tables
+                      .filter(t => !tableSearch || t.number.toString().includes(tableSearch))
+                      .map(t => (
+                      <button 
+                        key={t.id}
+                        onClick={() => {
+                          setSelectedTable(t.id);
+                          setTableSearch(t.number.toString());
+                        }}
+                        className={cn(
+                          "aspect-square rounded-xl font-sans font-bold transition-all shadow-sm flex items-center justify-center text-base border-2",
+                          selectedTable === t.id 
+                            ? "bg-stone-900 border-stone-900 text-white scale-110 shadow-stone-300 z-10" 
+                            : "bg-white border-stone-50 text-stone-400 hover:bg-stone-50 hover:border-stone-200"
+                        )}
+                      >
+                        {t.number}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -2404,7 +3031,7 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
                 <div className="flex flex-col md:flex-row md:items-baseline justify-between gap-2 mb-2">
                   <div className="flex items-center gap-2">
                     <h3 className="text-2xl font-bold italic text-stone-900">{item.name}</h3>
-                    {item.is_dish_of_day === 1 && (
+                    {item.is_dish_of_day && (
                       <span className="bg-emerald-500 text-white text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-full">Prato do Dia</span>
                     )}
                   </div>
@@ -2477,19 +3104,23 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
                       <div className="flex items-center gap-3">
                         <div className={cn(
                           "w-10 h-10 rounded-xl flex items-center justify-center",
-                          selectedTable === -1 ? "bg-emerald-500/20 text-emerald-500" : 
+                          selectedTable === 'counter' ? "bg-emerald-500/20 text-emerald-500" : 
+                          selectedTable === -2 ? "bg-blue-500/20 text-blue-500" :
                           selectedTable ? "bg-stone-700 text-white" : "bg-red-500/20 text-red-500"
                         )}>
-                          {selectedTable === -1 ? <Beer size={20} /> : <TableIcon size={20} />}
+                          {selectedTable === 'counter' ? <Beer size={20} /> : 
+                           selectedTable === -2 ? <Truck size={20} /> :
+                           <TableIcon size={20} />}
                         </div>
                         <div>
                           <p className="font-bold text-sm">
-                            {selectedTable === -1 ? 'Retirada no Balcão' : 
+                            {selectedTable === 'counter' ? 'Retirada no Balcão' : 
+                             selectedTable === -2 ? 'Entrega (Delivery)' :
                              selectedTable ? `Mesa ${tables.find(t => t.id === selectedTable)?.number}` : 
-                             'Mesa não selecionada'}
+                             'Local não selecionado'}
                           </p>
                           <p className="text-[10px] text-stone-500">
-                            {selectedTable ? 'Pedido será entregue no local' : 'Por favor, selecione onde entregar'}
+                            {selectedTable ? 'Pedido será processado' : 'Por favor, selecione onde entregar'}
                           </p>
                         </div>
                       </div>
@@ -2537,7 +3168,7 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
                 >
                   <div className="text-left">
                     <p className="text-[10px] uppercase tracking-widest text-stone-400 flex items-center gap-1">
-                      {selectedTable === -1 ? 'Balcão' : selectedTable ? `Mesa ${tables.find(t => t.id === selectedTable)?.number}` : 'Sem Mesa'} {showCartDetails ? '↑' : '↓'}
+                      {selectedTable === 'counter' ? 'Balcão' : (selectedTable === -2 ? 'Delivery' : (selectedTable ? `Mesa ${tables.find(t => t.id === selectedTable)?.number}` : 'Sem Mesa'))} {showCartDetails ? '↑' : '↓'}
                     </p>
                     <p className="text-xl font-bold">R$ {total.toFixed(2)}</p>
                   </div>
@@ -2667,19 +3298,84 @@ const CustomerMenu = ({ initialTableId, onClose }: { initialTableId?: number | n
 
 export default function App() {
   const [view, setView] = useState<'customer' | 'admin' | 'kitchen'>('customer');
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [initialTableId, setInitialTableId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const table = params.get('table') || params.get('table_id');
+    if (table) {
+      setInitialTableId(table);
+      setView('customer');
+    }
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthReady(true);
+      
+      // If user logs in, ensure they have a document in the users collection
+      if (u) {
+        const userRef = doc(db, 'users', u.uid);
+        getDoc(userRef).then((docSnap) => {
+          if (!docSnap.exists()) {
+            setDoc(userRef, {
+              name: u.displayName,
+              email: u.email,
+              role: 'admin',
+              created_at: new Date().toISOString()
+            }).catch(e => handleFirestoreError(e, OperationType.CREATE, `users/${u.uid}`));
+          }
+        }).catch(e => handleFirestoreError(e, OperationType.GET, `users/${u.uid}`));
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="w-12 h-12 border-4 border-stone-900 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setView('customer');
+  };
 
   return (
-    <div className="min-h-screen">
-      {/* View Selector for Demo Convenience */}
-      <div className="fixed top-4 right-4 z-[100] flex gap-2 bg-white/50 backdrop-blur p-1 rounded-full border border-white/20 shadow-sm">
-        <button onClick={() => setView('customer')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'customer' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Menu</button>
-        <button onClick={() => setView('admin')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'admin' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Admin</button>
-        <button onClick={() => setView('kitchen')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'kitchen' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Cozinha</button>
-      </div>
+    <ErrorBoundary>
+      <div className="min-h-screen">
+        {/* View Selector for Demo Convenience */}
+        <div className="fixed top-4 right-4 z-[100] flex gap-2 bg-white/50 backdrop-blur p-1 rounded-full border border-white/20 shadow-sm">
+          <button onClick={() => setView('customer')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'customer' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Menu</button>
+          <button onClick={() => setView('admin')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'admin' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Admin</button>
+          <button onClick={() => setView('kitchen')} className={cn("px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all", view === 'kitchen' ? "bg-stone-900 text-white" : "text-stone-500 hover:text-stone-900")}>Cozinha</button>
+          {user && (
+            <button onClick={handleLogout} className="px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest text-red-500 hover:bg-red-50 transition-all">Sair</button>
+          )}
+        </div>
 
-      {view === 'customer' && <CustomerMenu />}
-      {view === 'admin' && <AdminPanel onViewChange={setView} />}
-      {view === 'kitchen' && <KitchenPanel onViewChange={setView} />}
-    </div>
+        {view === 'customer' && (
+          <CustomerMenu 
+            initialTableId={initialTableId} 
+            user={user} 
+            onViewChange={setView} 
+          />
+        )}
+        
+        {view === 'admin' && (
+          user ? <AdminPanel onViewChange={setView} /> : <LoginScreen onLogin={() => setView('admin')} />
+        )}
+        
+        {view === 'kitchen' && (
+          user ? <KitchenPanel onViewChange={setView} /> : <LoginScreen onLogin={() => setView('kitchen')} />
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
