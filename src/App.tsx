@@ -370,7 +370,7 @@ const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
 
 // --- Auth Component ---
 
-const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
+const LoginScreen = ({ onLogin }: { onLogin: (user?: any) => void }) => {
   const [email, setEmail] = useState('admin@admin.com');
   const [password, setPassword] = useState('123456789');
   const [loading, setLoading] = useState(false);
@@ -380,6 +380,23 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // 1. Bypass local para as credenciais padrão de admin exigidas pelo usuário
+    if (email === 'admin@admin.com' && password === '123456789') {
+      const localUser = {
+        uid: 'admin-local',
+        email: 'admin@admin.com',
+        displayName: 'Administrador Local',
+        emailVerified: true,
+        isAnonymous: false,
+        providerId: 'local'
+      };
+      localStorage.setItem('local_admin_user', JSON.stringify(localUser));
+      onLogin(localUser);
+      setLoading(false);
+      return;
+    }
+
     try {
       // Attempt sign in with the email and password
       await signInWithEmailAndPassword(auth, email, password);
@@ -395,13 +412,13 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
         } catch (createErr: any) {
           console.error("Registration error:", createErr);
           if (createErr.code === 'auth/operation-not-allowed') {
-            setError("O login por E-mail/Senha não está ativado no Firebase Console. Ative em: Authentication > Sign-in method > E-mail/senha.");
+            setError("O login por E-mail/Senha não está ativado no Firebase Console. Para entrar agora, utilize as credenciais administrativas padrão: admin@admin.com com a senha 123456789.");
           } else {
             setError(createErr.message || "Erro de credenciais.");
           }
         }
       } else if (err.code === 'auth/operation-not-allowed') {
-        setError("O login por E-mail/Senha não está ativado no Firebase Console. Ative em: Authentication > Sign-in method > E-mail/senha.");
+        setError("O login por E-mail/Senha não está ativado no Firebase Console. Para entrar agora, utilize as credenciais administrativas padrão: admin@admin.com com a senha 123456789.");
       } else {
         setError(err.message || "Ocorreu um erro ao realizar o login. Por favor, tente novamente.");
       }
@@ -3300,7 +3317,14 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
 
 export default function App() {
   const [view, setView] = useState<'customer' | 'admin' | 'kitchen'>('customer');
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<any>(() => {
+    try {
+      const local = localStorage.getItem('local_admin_user');
+      return local ? JSON.parse(local) : null;
+    } catch {
+      return null;
+    }
+  });
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [initialTableId, setInitialTableId] = useState<string | null>(null);
 
@@ -3314,7 +3338,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (localStorage.getItem('local_admin_user')) {
+      setIsAuthReady(true);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (localStorage.getItem('local_admin_user')) {
+        setIsAuthReady(true);
+        return;
+      }
       setUser(u);
       setIsAuthReady(true);
       
@@ -3345,7 +3378,9 @@ export default function App() {
   }
 
   const handleLogout = async () => {
+    localStorage.removeItem('local_admin_user');
     await signOut(auth);
+    setUser(null);
     setView('customer');
   };
 
@@ -3371,11 +3406,11 @@ export default function App() {
         )}
         
         {view === 'admin' && (
-          user ? <AdminPanel onViewChange={setView} /> : <LoginScreen onLogin={() => setView('admin')} />
+          user ? <AdminPanel onViewChange={setView} /> : <LoginScreen onLogin={(localUser) => { if (localUser) setUser(localUser); setView('admin'); }} />
         )}
         
         {view === 'kitchen' && (
-          user ? <KitchenPanel onViewChange={setView} /> : <LoginScreen onLogin={() => setView('kitchen')} />
+          user ? <KitchenPanel onViewChange={setView} /> : <LoginScreen onLogin={(localUser) => { if (localUser) setUser(localUser); setView('kitchen'); }} />
         )}
       </div>
     </ErrorBoundary>
