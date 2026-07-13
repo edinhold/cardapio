@@ -727,6 +727,39 @@ const AdminDashboard = () => {
     }
   };
 
+  const cancelOrderItem = async (orderId: string, itemIndexToRemove: number) => {
+    const order = recentOrders.find(o => o.id === orderId);
+    if (!order) return;
+
+    if (!window.confirm(`Deseja cancelar o item "${order.items[itemIndexToRemove]?.name || 'produto'}" deste pedido?`)) return;
+
+    const updatedItems = [...order.items];
+    updatedItems.splice(itemIndexToRemove, 1);
+
+    try {
+      if (updatedItems.length === 0) {
+        await updateDoc(doc(db, 'orders', orderId), {
+          items: [],
+          total_price: 0,
+          status: 'canceled'
+        });
+      } else {
+        const newTotal = updatedItems.reduce((sum, item) => {
+          const itemTotal = item.price_at_time;
+          const addonsTotal = item.addons?.reduce((s, a) => s + a.price_at_time, 0) || 0;
+          return sum + ((itemTotal + addonsTotal) * item.quantity);
+        }, 0);
+
+        await updateDoc(doc(db, 'orders', orderId), {
+          items: updatedItems,
+          total_price: newTotal
+        });
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
   if (!stats) return <div>Carregando...</div>;
 
   return (
@@ -798,38 +831,101 @@ const AdminDashboard = () => {
             {recentOrders
               .filter(o => orderFilter === 'all' || o.type === orderFilter)
               .map(order => (
-              <div key={order.id} className="flex justify-between items-center p-4 rounded-2xl bg-stone-50 border border-stone-100">
-                <div>
-                  <p className="font-bold text-stone-900">
-                    #{order.id} - {
-                      order.type === 'delivery' ? 'Delivery' : 
-                      order.type === 'counter' ? 'Balcão' : 
-                      `Mesa ${order.table_number}`
-                    }
-                  </p>
-                  <p className="text-xs text-stone-400">{new Date(order.created_at).toLocaleTimeString()}</p>
-                </div>
-                <div className="text-right flex flex-col items-end gap-1">
-                  <p className="font-bold text-stone-900">R$ {order.total_price.toFixed(2)}</p>
-                  <div className="flex items-center gap-2">
-                    {order.status !== 'paid' && order.status !== 'canceled' && (
-                      <button 
-                        onClick={() => cancelOrder(order.id)}
-                        className="text-[10px] text-red-500 hover:underline"
-                      >
-                        Cancelar
-                      </button>
-                    )}
-                    <span className={cn(
-                      "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
-                      order.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
-                      order.status === 'preparing' ? "bg-blue-100 text-blue-700" :
-                      order.status === 'canceled' ? "bg-red-100 text-red-700" :
-                      "bg-emerald-100 text-emerald-700"
-                    )}>
-                      {order.status}
-                    </span>
+              <div key={order.id} className="flex flex-col gap-3 p-5 rounded-2xl bg-stone-50 border border-stone-100">
+                {/* Header Row */}
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-bold text-stone-900">
+                      #{order.id.slice(-6).toUpperCase()} - {
+                        order.type === 'delivery' ? 'Delivery' : 
+                        order.type === 'counter' ? 'Balcão' : 
+                        `Mesa ${order.table_number}`
+                      }
+                    </p>
+                    <p className="text-xs text-stone-400">
+                      {new Date(order.created_at).toLocaleDateString()} {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
                   </div>
+                  <div className="text-right flex flex-col items-end gap-1">
+                    <p className="font-bold text-stone-900">R$ {order.total_price.toFixed(2)}</p>
+                    <div className="flex items-center gap-2">
+                      {order.status !== 'paid' && order.status !== 'canceled' && (
+                        <button 
+                          onClick={() => cancelOrder(order.id)}
+                          className="text-[10px] text-red-500 hover:underline font-bold"
+                        >
+                          Cancelar Pedido
+                        </button>
+                      )}
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                        order.status === 'pending' ? "bg-yellow-100 text-yellow-700" :
+                        order.status === 'preparing' ? "bg-blue-100 text-blue-700" :
+                        order.status === 'canceled' ? "bg-red-100 text-red-700" :
+                        "bg-emerald-100 text-emerald-700"
+                      )}>
+                        {order.status}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Delivery details if any */}
+                {order.delivery_info && (
+                  <div className="bg-stone-100/50 p-2.5 rounded-xl border border-stone-200/50 text-xs">
+                    <span className="font-bold text-stone-700">Entrega para:</span> {order.delivery_info.name} - {order.delivery_info.phone}<br/>
+                    <span className="font-bold text-stone-700">Endereço:</span> {order.delivery_info.address}
+                  </div>
+                )}
+
+                {/* Divider */}
+                <div className="border-t border-stone-200/60 my-1"></div>
+
+                {/* Items List */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Itens do Pedido:</p>
+                  {order.items && order.items.length > 0 ? (
+                    order.items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-sm py-1 border-b border-stone-200/40 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-stone-700 bg-stone-200/75 px-1.5 py-0.5 rounded text-xs">
+                              {item.quantity}x
+                            </span>
+                            <span className="font-semibold text-stone-800 truncate">{item.name}</span>
+                            <span className="text-xs text-stone-500 font-mono">
+                              (R$ {((item.price_at_time + (item.addons?.reduce((sum, a) => sum + a.price_at_time, 0) || 0)) * item.quantity).toFixed(2)})
+                            </span>
+                          </div>
+                          {item.observation && (
+                            <p className="text-xs text-amber-600 font-medium italic mt-0.5 ml-8">
+                              Obs: {item.observation}
+                            </p>
+                          )}
+                          {item.addons && item.addons.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1 ml-8">
+                              {item.addons.map((a, aidx) => (
+                                <span key={aidx} className="text-[9px] bg-stone-100 text-stone-600 px-1.5 py-0.5 rounded border border-stone-200">
+                                  + {a.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {order.status !== 'paid' && order.status !== 'canceled' && (
+                          <button
+                            onClick={() => cancelOrderItem(order.id, idx)}
+                            className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors shrink-0 ml-4"
+                            title="Cancelar este item"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-stone-400 italic">Nenhum item cadastrado neste pedido.</p>
+                  )}
                 </div>
               </div>
             ))}
