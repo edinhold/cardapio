@@ -69,8 +69,8 @@ import {
   setDoc
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   onAuthStateChanged, 
   signOut,
   User as FirebaseUser
@@ -371,26 +371,39 @@ const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
 // --- Auth Component ---
 
 const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
+  const [email, setEmail] = useState('admin@admin.com');
+  const [password, setPassword] = useState('123456789');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  const isIframe = window.self !== window.top;
 
-  const handleLogin = async () => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      // Attempt sign in with the email and password
+      await signInWithEmailAndPassword(auth, email, password);
       onLogin();
     } catch (err: any) {
       console.error("Login error:", err);
-      if (err && (err.code === "auth/popup-blocked" || err.message?.includes("popup-blocked") || err.message?.includes("closed-by-user"))) {
-        setError("popup-blocked");
-      } else if (err && err.message) {
-        setError(err.message);
+      // If user does not exist yet (or has been wiped), try registering it automatically
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+        try {
+          await createUserWithEmailAndPassword(auth, email, password);
+          onLogin();
+          return;
+        } catch (createErr: any) {
+          console.error("Registration error:", createErr);
+          if (createErr.code === 'auth/operation-not-allowed') {
+            setError("O login por E-mail/Senha não está ativado no Firebase Console. Ative em: Authentication > Sign-in method > E-mail/senha.");
+          } else {
+            setError(createErr.message || "Erro de credenciais.");
+          }
+        }
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError("O login por E-mail/Senha não está ativado no Firebase Console. Ative em: Authentication > Sign-in method > E-mail/senha.");
       } else {
-        setError("Ocorreu um erro ao realizar o login. Por favor, tente novamente.");
+        setError(err.message || "Ocorreu um erro ao realizar o login. Por favor, tente novamente.");
       }
     } finally {
       setLoading(false);
@@ -399,76 +412,65 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
-      <div className="bg-white p-10 rounded-[40px] shadow-2xl border border-stone-100 max-w-md w-full text-center">
-        <div className="w-20 h-20 bg-stone-900 text-white rounded-full flex items-center justify-center mx-auto mb-8">
+      <div className="bg-white p-10 rounded-[40px] shadow-2xl border border-stone-100 max-w-md w-full">
+        <div className="w-20 h-20 bg-stone-900 text-white rounded-full flex items-center justify-center mx-auto mb-6">
           <ChefHat size={40} />
         </div>
-        <h2 className="text-3xl font-bold italic mb-2">Bem-vindo</h2>
-        <p className="text-stone-500 mb-8 font-sans">Acesse o painel administrativo ou de cozinha.</p>
-        
-        {isIframe && !error && (
-          <div className="mb-6 p-4 bg-stone-50 border border-stone-150 rounded-2xl text-left flex gap-3 text-stone-600">
-            <Info size={18} className="shrink-0 mt-0.5 text-stone-500" />
-            <p className="text-xs leading-relaxed font-sans">
-              Para evitar bloqueios de pop-up do Google pelo navegador neste painel, recomendamos abrir o aplicativo em uma nova aba.
-            </p>
-          </div>
-        )}
+        <h2 className="text-3xl font-bold italic mb-2 text-center">Bem-vindo</h2>
+        <p className="text-stone-500 mb-8 font-sans text-center">Acesse o painel administrativo ou de cozinha.</p>
 
-        <div className="space-y-4">
-          <button 
-            onClick={handleLogin}
+        <form onSubmit={handleLoginSubmit} className="space-y-5 text-left">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 font-sans">
+              E-mail de Acesso
+            </label>
+            <input
+              type="email"
+              required
+              placeholder="admin@admin.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-5 py-3.5 rounded-2xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900 font-sans text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 font-sans">
+              Senha
+            </label>
+            <input
+              type="password"
+              required
+              placeholder="•••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-5 py-3.5 rounded-2xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-900 font-sans text-sm"
+            />
+          </div>
+
+          <button
+            type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-3 bg-white border-2 border-stone-100 py-4 rounded-full font-bold hover:bg-stone-50 transition-all shadow-sm"
+            className="w-full bg-stone-900 text-white py-4 rounded-full font-bold hover:bg-stone-800 transition-all shadow-md mt-2 flex items-center justify-center"
           >
             {loading ? (
-              <div className="w-5 h-5 border-2 border-stone-900 border-t-transparent rounded-full animate-spin" />
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
-              <>
-                <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-                Entrar com Google
-              </>
+              "Entrar no Painel"
             )}
           </button>
-
-          {isIframe && (
-            <a 
-              href={window.location.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full block text-center border border-stone-200 text-stone-700 bg-stone-50 hover:bg-stone-100 py-3.5 rounded-full font-bold transition-all text-sm font-sans"
-            >
-              Abrir em Nova Aba ↗
-            </a>
-          )}
-        </div>
+        </form>
 
         {error && (
-          <div className="mt-6 p-4 bg-amber-50 border border-amber-200/60 rounded-3xl text-left space-y-3">
+          <div className="mt-6 p-5 bg-amber-50/60 border border-amber-200 rounded-3xl text-left space-y-4 font-sans">
             <div className="flex items-start gap-3 text-amber-800">
-              <AlertCircle size={20} className="shrink-0 mt-0.5 text-amber-600" />
+              <AlertCircle size={22} className="shrink-0 mt-0.5 text-amber-600" />
               <div>
-                <p className="font-semibold text-sm">Acesso Bloqueado ou Cancelado</p>
-                <p className="text-xs text-amber-750 leading-relaxed font-sans mt-1">
-                  Seu navegador bloqueou o pop-up de login do Google ou ele foi fechado antes da conclusão. Como o app está rodando de forma integrada (iframe), o login requer autorização ou abertura direta.
+                <p className="font-semibold text-sm">Problema ao Autenticar</p>
+                <p className="text-xs text-stone-600 leading-relaxed mt-1">
+                  {error}
                 </p>
               </div>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2 pt-1 font-sans">
-              <button
-                onClick={handleLogin}
-                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition-colors"
-              >
-                Tentar Novamente
-              </button>
-              <a
-                href={window.location.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 bg-white hover:bg-stone-50 text-stone-700 border border-stone-200 text-xs font-bold py-2.5 px-4 rounded-xl transition-colors text-center inline-block"
-              >
-                Abrir em Nova Aba ↗
-              </a>
             </div>
           </div>
         )}
