@@ -182,10 +182,48 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 // --- Shared Utilities ---
 
+const printHtml = (title: string, htmlContent: string) => {
+  try {
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      return;
+    }
+  } catch (e) {
+    console.warn("Failed to open print window, falling back to iframe:", e);
+  }
+
+  // Fallback to iframe printing (perfect for iframe sandbox or blocked popups)
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.title = title;
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+  if (doc) {
+    doc.write(htmlContent);
+    doc.close();
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (err) {
+        console.error("Iframe print error:", err);
+      } finally {
+        document.body.removeChild(iframe);
+      }
+    }, 500);
+  }
+};
+
 const handlePrint = (order: Order) => {
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) return;
-  printWindow.document.write(`
+  printHtml(`Pedido #${order.id}`, `
     <html>
       <head>
         <title>Pedido #${order.id}</title>
@@ -201,6 +239,10 @@ const handlePrint = (order: Order) => {
         </style>
       </head>
       <body>
+        <div style="text-align: center; border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 10px;">
+          <h1 style="margin: 0; font-size: 1.25em; font-family: sans-serif; font-weight: bold; text-transform: uppercase;">Ponto Certo Comida Caseira</h1>
+          <p style="margin: 3px 0 0 0; font-size: 0.85em; font-family: sans-serif;">(65) 98465-6023</p>
+        </div>
         <div class="header">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
             <h2 style="margin: 0;">PEDIDO #${order.id.slice(-4).toUpperCase()}</h2>
@@ -253,7 +295,6 @@ const handlePrint = (order: Order) => {
       </body>
     </html>
   `);
-  printWindow.document.close();
 };
 
 const consolidateItems = (orders: Order[]) => {
@@ -278,12 +319,9 @@ const consolidateItems = (orders: Order[]) => {
 };
 
 const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) return;
-  
   const consolidated = consolidateItems(orders);
   
-  printWindow.document.write(`
+  printHtml(`Comprovante - ${title}`, `
     <html>
       <head>
         <title>Comprovante - ${title}</title>
@@ -317,7 +355,8 @@ const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
       </head>
       <body>
         <div class="header center">
-          <div class="title">SABOR CASEIRO</div>
+          <div class="title" style="font-size: 1.25em; text-transform: uppercase;">Ponto Certo Comida Caseira</div>
+          <p style="margin: 3px 0 10px 0; font-size: 0.85em;">(65) 98465-6023</p>
           <div class="subtitle">Comprovante de Fechamento</div>
           <div style="font-size: 0.8em; margin-top: 5px; line-height: 1.4;">
             <strong>${title}</strong><br/>
@@ -353,7 +392,7 @@ const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
         <div class="footer">
           <p style="margin: 3px 0; font-weight: bold;">Obrigado pela preferência!</p>
           <p style="margin: 3px 0; font-size: 0.8em; opacity: 0.7;">Volte sempre!</p>
-          <p style="margin-top: 15px; font-size: 0.7em; opacity: 0.4;">Sabor Caseiro System</p>
+          <p style="margin-top: 15px; font-size: 0.7em; opacity: 0.4;">Ponto Certo Comida Caseira</p>
         </div>
 
         <script>
@@ -365,7 +404,6 @@ const handlePrintReceipt = (title: string, orders: Order[], total: number) => {
       </body>
     </html>
   `);
-  printWindow.document.close();
 };
 
 // --- Auth Component ---
@@ -617,12 +655,9 @@ const AdminDashboard = () => {
 
       const itemsSold = Object.values(itemsMap);
       
-      const printWindow = window.open('', '_blank');
-      if (!printWindow) return;
-      
       const periodLabel = period === 'day' ? 'HOJE' : period === 'week' ? 'ÚLTIMA SEMANA' : 'ÚLTIMOS 30 DIAS';
       
-      printWindow.document.write(`
+      printHtml(`Relatório de Vendas - ${periodLabel}`, `
         <html>
           <head>
             <title>Relatório de Vendas - ${periodLabel}</title>
@@ -639,7 +674,7 @@ const AdminDashboard = () => {
             </style>
           </head>
           <body>
-            <h2>SABOR CASEIRO</h2>
+            <h2>PONTO CERTO COMIDA CASEIRA</h2>
             <p>RELATÓRIO DE VENDAS: ${periodLabel}</p>
             <p>Gerado em: ${new Date().toLocaleString()}</p>
             <hr/>
@@ -677,7 +712,6 @@ const AdminDashboard = () => {
           </body>
         </html>
       `);
-      printWindow.document.close();
     } catch (err) {
       console.error('Report print error:', err);
       alert('Erro ao gerar relatório.');
@@ -1271,15 +1305,20 @@ const TableManagement = () => {
     const tableId = selectedTable === 'counter' ? 'counter' : selectedTable.id;
     const q = query(
       collection(db, 'orders'),
-      where('table_id', '==', tableId),
-      where('status', '!=', 'paid'),
-      orderBy('status'),
-      orderBy('created_at', 'desc')
+      where('table_id', '==', tableId)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      setTableOrders(data.filter(o => o.status !== 'canceled'));
+      const activeOrders = data
+        .filter(o => o.status !== 'paid' && o.status !== 'canceled')
+        .sort((a, b) => {
+          if (a.status !== b.status) {
+            return a.status.localeCompare(b.status);
+          }
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+      setTableOrders(activeOrders);
       setLoadingOrders(false);
     }, (err) => {
       setLoadingOrders(false);
@@ -1729,9 +1768,7 @@ const TableManagement = () => {
                 <button 
                   onClick={() => {
                     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?table=${qrModalTable.number}`)}`;
-                    const printW = window.open('', '_blank');
-                    if (!printW) return;
-                    printW.document.write(`
+                    printHtml(`QR Code - Mesa ${qrModalTable.number}`, `
                       <html>
                         <head>
                           <title>QR Code - Mesa ${qrModalTable.number}</title>
@@ -1746,8 +1783,8 @@ const TableManagement = () => {
                         </head>
                         <body>
                           <div class="card">
-                            <h1>Sabor Caseiro</h1>
-                            <p>Faça seu Pedido Online</p>
+                            <h1>Ponto Certo</h1>
+                            <p>Comida Caseira</p>
                             <img src="${qrUrl}" style="width: 240px; height: 240px;" />
                             <div class="table-num">MESA ${qrModalTable.number}</div>
                             <div class="instructions">Escaneie o QR Code com<br/>a câmera do seu celular</div>
@@ -1761,7 +1798,6 @@ const TableManagement = () => {
                         </body>
                       </html>
                     `);
-                    printW.document.close();
                   }}
                   className="w-full bg-stone-100 hover:bg-stone-200 text-stone-900 border border-stone-200 py-4 rounded-full font-bold text-sm transition-all flex items-center justify-center gap-2"
                 >
@@ -1945,15 +1981,20 @@ const DeliveryManagement = () => {
     setLoading(true);
     const q = query(
       collection(db, 'orders'),
-      where('table_id', '==', -2),
-      where('status', '!=', 'paid'),
-      orderBy('status'),
-      orderBy('created_at', 'desc')
+      where('table_id', '==', -2)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      setOrders(data.filter(o => o.status !== 'canceled'));
+      const activeOrders = data
+        .filter(o => o.status !== 'paid' && o.status !== 'canceled')
+        .sort((a, b) => {
+          if (a.status !== b.status) {
+            return a.status.localeCompare(b.status);
+          }
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+      setOrders(activeOrders);
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'orders');
@@ -2185,11 +2226,11 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
           {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
 
-        <div className={cn("flex items-center gap-3 px-2", isCollapsed && "justify-center")}>
-          <div className="bg-stone-900 p-2 rounded-lg text-white shrink-0">
-            <TrendingUp size={20} />
+        <div className={cn("flex items-center gap-3 px-1", isCollapsed && "justify-center")}>
+          <div className="w-10 h-10 rounded-full border border-stone-200 overflow-hidden shrink-0 flex items-center justify-center bg-stone-50">
+            <img src="/logo.png" className="w-full h-full object-cover" alt="Logo" referrerPolicy="no-referrer" />
           </div>
-          {!isCollapsed && <h1 className="font-bold text-xl tracking-tight overflow-hidden whitespace-nowrap">SaborAdmin</h1>}
+          {!isCollapsed && <h1 className="font-bold text-lg tracking-tight overflow-hidden whitespace-nowrap text-stone-900">Ponto Certo</h1>}
         </div>
         
         <nav className="flex flex-col gap-2">

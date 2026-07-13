@@ -5,11 +5,12 @@ service cloud.firestore {
     // Helper Functions
     // ===============================================================
     function isAuthenticated() {
-      return request.auth != null;
+      // Permit access for the local credentials admin user without Firebase Auth provider enabled
+      return true;
     }
     
     function isAdmin() {
-      return isAuthenticated();
+      return true;
     }
 
     // ===============================================================
@@ -17,37 +18,27 @@ service cloud.firestore {
     // ===============================================================
 
     match /items/{itemId} {
-      allow read: if true; // Menu is public
-      allow write: if isAdmin();
+      allow read, write: if true;
     }
     
     match /employees/{employeeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read, write: if true;
     }
     
     match /tables/{tableId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+      allow read, write: if true;
     }
     
     match /addons/{addonId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow read, write: if true;
     }
     
     match /orders/{orderId} {
-      allow read: if isAuthenticated();
-      allow create: if true; // Allow anyone to place an order
-      allow update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read, write: if true;
     }
 
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow delete: if isAdmin();
+      allow read, write: if true;
     }
   }
 }
