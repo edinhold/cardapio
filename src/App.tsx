@@ -75,6 +75,7 @@ import {
   signOut,
   User as FirebaseUser
 } from 'firebase/auth';
+const logoImg = 'logo.png';
 
 // --- Error Handling ---
 
@@ -469,7 +470,7 @@ const LoginScreen = ({ onLogin }: { onLogin: (user?: any) => void }) => {
     <div className="min-h-screen flex items-center justify-center bg-stone-50 p-6">
       <div className="bg-white p-10 rounded-[40px] shadow-2xl border border-stone-100 max-w-md w-full">
         <div className="w-20 h-20 rounded-full overflow-hidden flex items-center justify-center mx-auto mb-6 border border-stone-200 shadow-md bg-stone-50">
-          <img src="/logo.png" className="w-full h-full object-cover" alt="Logo" referrerPolicy="no-referrer" />
+          <img src={logoImg} className="w-full h-full object-cover" alt="Logo" referrerPolicy="no-referrer" />
         </div>
         <h2 className="text-3xl font-bold italic mb-2 text-center">Bem-vindo</h2>
         <p className="text-stone-500 mb-8 font-sans text-center">Acesse o painel administrativo ou de cozinha.</p>
@@ -2324,7 +2325,7 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
 
         <div className={cn("flex items-center gap-3 px-1", isCollapsed && "justify-center")}>
           <div className="w-10 h-10 rounded-full border border-stone-200 overflow-hidden shrink-0 flex items-center justify-center bg-stone-50">
-            <img src="/logo.png" className="w-full h-full object-cover" alt="Logo" referrerPolicy="no-referrer" />
+            <img src={logoImg} className="w-full h-full object-cover" alt="Logo" referrerPolicy="no-referrer" />
           </div>
           {!isCollapsed && <h1 className="font-bold text-lg tracking-tight overflow-hidden whitespace-nowrap text-stone-900">Ponto Certo</h1>}
         </div>
@@ -3003,7 +3004,7 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
       <header className="relative z-10 bg-white/80 backdrop-blur-md px-6 py-12 text-center border-b border-stone-200 shadow-sm">
         <div className="max-w-xl mx-auto">
           <div className="w-24 h-24 rounded-full mx-auto mb-4 overflow-hidden shadow-lg border-4 border-white bg-white flex items-center justify-center">
-            <img src="/logo.png" className="w-full h-full object-cover animate-fade-in" alt="Logo" referrerPolicy="no-referrer" />
+            <img src={logoImg} className="w-full h-full object-cover animate-fade-in" alt="Logo" referrerPolicy="no-referrer" />
           </div>
           <h1 className="text-5xl font-bold italic mb-2 text-stone-900">Ponto Certo</h1>
           <p className="text-stone-600 font-sans uppercase tracking-[0.3em] text-sm font-bold mb-1">Comida Caseira</p>
