@@ -43,6 +43,7 @@ export interface Order {
   table_id?: string | number;
   table_number?: number;
   total_price: number;
+  payment_method?: 'dinheiro' | 'cartao' | 'pix' | string;
   status: 'pending' | 'preparing' | 'ready' | 'delivered' | 'paid' | 'canceled';
   type: 'table' | 'counter' | 'delivery';
   created_at: string;
@@ -52,6 +53,61 @@ export interface Order {
     address: string;
   } | null;
   items: OrderItem[];
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  address: string;
+  phone: string;
+  cnpj?: string;
+  observations?: string;
+  active: boolean;
+  created_at: string;
+  current_balance?: number;
+}
+
+export interface CustomerOrderItem {
+  item_id: string;
+  name: string;
+  quantity: number;
+  original_price: number;
+  custom_price: number;
+  observation?: string;
+}
+
+export interface CustomerOrder {
+  id: string;
+  customer_id: string;
+  customer_name?: string;
+  total_price: number;
+  created_at: string;
+  observations?: string;
+  created_by?: string;
+  items: CustomerOrderItem[];
+}
+
+export interface CustomerPayment {
+  id: string;
+  customer_id: string;
+  amount: number;
+  payment_method: string;
+  date: string;
+  observation?: string;
+  created_by?: string;
+}
+
+export interface DailyClosure {
+  id?: string;
+  date: string;
+  issued_at: string;
+  responsible: string;
+  total_cash: number;
+  total_card: number;
+  total_pix: number;
+  total_overall: number;
+  total_orders: number;
+  average_ticket: number;
 }
 
 export interface SalesStats {

@@ -37,6 +37,22 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /customers/{customerId} {
+      allow read, write: if true;
+    }
+
+    match /customer_orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    match /customer_payments/{paymentId} {
+      allow read, write: if true;
+    }
+
+    match /daily_closures/{closureId} {
+      allow read, write: if true;
+    }
+
     match /users/{userId} {
       allow read, write: if true;
     }

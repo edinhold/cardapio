@@ -54,6 +54,7 @@
         "table_id": { "type": "string" },
         "table_number": { "type": "integer" },
         "total_price": { "type": "number" },
+        "payment_method": { "type": "string", "enum": ["dinheiro", "cartao", "pix"] },
         "status": { "type": "string", "enum": ["pending", "preparing", "ready", "delivered", "paid", "canceled"] },
         "type": { "type": "string", "enum": ["table", "counter", "delivery"] },
         "created_at": { "type": "string", "format": "date-time" },
@@ -83,6 +84,81 @@
         }
       },
       "required": ["total_price", "status", "type", "created_at"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Registered weekly payment customer",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "observations": { "type": "string" },
+        "active": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "current_balance": { "type": "number" }
+      },
+      "required": ["name", "address", "phone", "created_at"]
+    },
+    "CustomerOrder": {
+      "title": "Customer Order",
+      "description": "Order created specifically for a registered customer with custom prices",
+      "type": "object",
+      "properties": {
+        "customer_id": { "type": "string" },
+        "customer_name": { "type": "string" },
+        "total_price": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "observations": { "type": "string" },
+        "created_by": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item_id": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "integer" },
+              "original_price": { "type": "number" },
+              "custom_price": { "type": "number" },
+              "observation": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["customer_id", "total_price", "created_at"]
+    },
+    "CustomerPayment": {
+      "title": "Customer Payment",
+      "description": "Payment registered for a customer account",
+      "type": "object",
+      "properties": {
+        "customer_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "payment_method": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "observation": { "type": "string" },
+        "created_by": { "type": "string" }
+      },
+      "required": ["customer_id", "amount", "payment_method", "date"]
+    },
+    "DailyClosure": {
+      "title": "Daily Closure",
+      "description": "Daily financial closure report record",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "responsible": { "type": "string" },
+        "total_cash": { "type": "number" },
+        "total_card": { "type": "number" },
+        "total_pix": { "type": "number" },
+        "total_overall": { "type": "number" },
+        "total_orders": { "type": "integer" },
+        "average_ticket": { "type": "number" }
+      },
+      "required": ["date", "issued_at", "total_overall", "total_orders"]
     }
   },
   "firestore": {
@@ -90,6 +166,10 @@
     "/employees": { "schema": "Employee", "description": "Staff members" },
     "/tables": { "schema": "Table", "description": "Restaurant tables" },
     "/addons": { "schema": "Addon", "description": "Available addons" },
-    "/orders": { "schema": "Order", "description": "Customer orders" }
+    "/orders": { "schema": "Order", "description": "Customer orders" },
+    "/customers": { "schema": "Customer", "description": "Registered weekly customers" },
+    "/customer_orders": { "schema": "CustomerOrder", "description": "Orders launched for customers" },
+    "/customer_payments": { "schema": "CustomerPayment", "description": "Payments registered for customers" },
+    "/daily_closures": { "schema": "DailyClosure", "description": "Daily closures" }
   }
 }

@@ -33,8 +33,12 @@ import {
   XCircle,
   LogOut,
   AlertCircle,
-  QrCode
+  QrCode,
+  FileText,
+  UserCheck
 } from 'lucide-react';
+import { ReportsManagement } from './components/ReportsManagement';
+import { CustomersManagement } from './components/CustomersManagement';
 import { 
   LineChart, 
   Line, 
@@ -2306,8 +2310,8 @@ const DeliveryManagement = () => {
   );
 };
 
-const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons' | 'delivery'>('dashboard');
+const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void; currentUser?: any }) => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons' | 'delivery' | 'reports' | 'customers'>('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
@@ -2337,6 +2341,8 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
           <SidebarItem icon={Users} label="Funcionários" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} collapsed={isCollapsed} />
           <SidebarItem icon={TableIcon} label="Mesas" active={activeTab === 'tables'} onClick={() => setActiveTab('tables')} collapsed={isCollapsed} />
           <SidebarItem icon={Truck} label="Delivery" active={activeTab === 'delivery'} onClick={() => setActiveTab('delivery')} collapsed={isCollapsed} />
+          <SidebarItem icon={FileText} label="Relatórios" active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} collapsed={isCollapsed} />
+          <SidebarItem icon={UserCheck} label="Clientes (Fiado)" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} collapsed={isCollapsed} />
           
           <div className="my-4 border-t border-stone-100 pt-4">
             <SidebarItem icon={ChefHat} label="Painel Cozinha" active={false} onClick={() => onViewChange('kitchen')} collapsed={isCollapsed} />
@@ -2354,15 +2360,19 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
               {activeTab === 'employees' && 'Equipe'}
               {activeTab === 'tables' && 'Salão'}
               {activeTab === 'delivery' && 'Delivery'}
+              {activeTab === 'reports' && 'Relatórios'}
+              {activeTab === 'customers' && 'Cadastro de Clientes'}
             </h2>
             <p className="text-stone-500">Bem-vindo ao painel de controle.</p>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-right">
-              <p className="text-sm font-bold">Admin User</p>
+              <p className="text-sm font-bold">{currentUser?.displayName || currentUser?.email || 'Admin User'}</p>
               <p className="text-xs text-stone-400">Gerente</p>
             </div>
-            <div className="w-10 h-10 bg-stone-200 rounded-full" />
+            <div className="w-10 h-10 bg-stone-200 rounded-full flex items-center justify-center font-bold text-stone-600 uppercase">
+              {(currentUser?.email || 'A')[0]}
+            </div>
           </div>
         </header>
 
@@ -2372,6 +2382,8 @@ const AdminPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin
         {activeTab === 'employees' && <EmployeeManagement />}
         {activeTab === 'tables' && <TableManagement />}
         {activeTab === 'delivery' && <DeliveryManagement />}
+        {activeTab === 'reports' && <ReportsManagement currentUser={currentUser} isAdmin={true} printHtml={printHtml} />}
+        {activeTab === 'customers' && <CustomersManagement currentUser={currentUser} isAdmin={true} printHtml={printHtml} />}
       </main>
     </div>
   );
@@ -3544,7 +3556,7 @@ export default function App() {
         )}
         
         {view === 'admin' && (
-          user ? <AdminPanel onViewChange={setView} /> : <LoginScreen onLogin={(localUser) => { if (localUser) setUser(localUser); setView('admin'); }} />
+          user ? <AdminPanel onViewChange={setView} currentUser={user} /> : <LoginScreen onLogin={(localUser) => { if (localUser) setUser(localUser); setView('admin'); }} />
         )}
         
         {view === 'kitchen' && (
