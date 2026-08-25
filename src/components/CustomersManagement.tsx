@@ -103,12 +103,15 @@ export const CustomersManagement: React.FC<CustomersManagementProps> = ({
   useEffect(() => {
     setLoading(true);
 
-    const qCust = query(collection(db, 'customers'), orderBy('name', 'asc'));
+    const qCust = collection(db, 'customers');
     const unsubCust = onSnapshot(
       qCust,
       (snapshot) => {
         const custs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
+        // Sort safely client-side alphabetically
+        custs.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' }));
         setCustomers(custs);
+        setError(null);
         setLoading(false);
         console.log('[CadastroClientes]', { totalCustomers: custs.length, timestamp: new Date().toISOString() });
 
@@ -120,16 +123,17 @@ export const CustomersManagement: React.FC<CustomersManagementProps> = ({
       },
       (err) => {
         console.error('[CadastroClientes] Error fetching customers:', err);
-        setError('Erro ao carregar lista de clientes.');
+        setError('Erro ao carregar lista de clientes. Verifique a conexão com o banco de dados.');
         setLoading(false);
       }
     );
 
-    const qItems = query(collection(db, 'items'));
+    const qItems = collection(db, 'items');
     const unsubItems = onSnapshot(
       qItems,
       (snapshot) => {
         const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
+        items.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' }));
         setMenuItems(items);
       },
       (err) => {

@@ -62,12 +62,14 @@ export const ReportsManagement: React.FC<ReportsManagementProps> = ({
     setError(null);
 
     // Subscribe to orders
-    const qOrders = query(collection(db, 'orders'), orderBy('created_at', 'desc'));
+    const qOrders = collection(db, 'orders');
     const unsubOrders = onSnapshot(
       qOrders,
       (snapshot) => {
         const orderData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+        orderData.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
         setOrders(orderData);
+        setError(null);
         setLoading(false);
         console.log('[Relatorios]', { totalOrdersFetched: orderData.length, timestamp: new Date().toISOString() });
       },
@@ -79,7 +81,7 @@ export const ReportsManagement: React.FC<ReportsManagementProps> = ({
     );
 
     // Subscribe to menu items
-    const qItems = query(collection(db, 'items'));
+    const qItems = collection(db, 'items');
     const unsubItems = onSnapshot(
       qItems,
       (snapshot) => {
