@@ -2537,38 +2537,176 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   const [kitchenTab, setKitchenTab] = useState<'active' | 'history'>('active');
   const [historyFilter, setHistoryFilter] = useState<'day' | 'week'>('day');
   const [showNotification, setShowNotification] = useState(false);
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const audioEnabledRef = useRef(false);
+  const [latestNewOrder, setLatestNewOrder] = useState<Order | null>(null);
+  const [audioEnabled, setAudioEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('kitchen_audio_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const audioEnabledRef = useRef(audioEnabled);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const initialLoadRef = useRef(true);
+  const knownOrderIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     audioEnabledRef.current = audioEnabled;
+    try {
+      localStorage.setItem('kitchen_audio_enabled', String(audioEnabled));
+    } catch {}
   }, [audioEnabled]);
 
+  // Audio synthesizer chime using Web Audio API (0ms latency, works completely offline & in PWA)
+  const playInstantChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      // Note 1: 784 Hz (G5)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(783.99, now);
+      gain1.gain.setValueAtTime(0.35, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.35);
+
+      // Note 2: 1046.5 Hz (C6)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(1046.5, now + 0.16);
+      gain2.gain.setValueAtTime(0.4, now + 0.16);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.16);
+      osc2.stop(now + 0.7);
+
+      // Note 3: 1318.5 Hz (E6)
+      const osc3 = ctx.createOscillator();
+      const gain3 = ctx.createGain();
+      osc3.type = 'triangle';
+      osc3.frequency.setValueAtTime(1318.51, now + 0.32);
+      gain3.gain.setValueAtTime(0.45, now + 0.32);
+      gain3.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+      osc3.connect(gain3);
+      gain3.connect(ctx.destination);
+      osc3.start(now + 0.32);
+      osc3.stop(now + 1.2);
+    } catch (e) {
+      console.warn('Web Audio error:', e);
+    }
+  };
+
+  const triggerOrderAlert = (order: Order) => {
+    setLatestNewOrder(order);
+    setShowNotification(true);
+
+    if (audioEnabledRef.current) {
+      playInstantChime();
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play().catch(e => console.log('Audio fallback blocked:', e));
+      }
+    }
+
+    if ('vibrate' in navigator) {
+      try {
+        navigator.vibrate([250, 100, 250, 100, 400]);
+      } catch {}
+    }
+
+    setTimeout(() => setShowNotification(false), 8000);
+  };
+
+  // High-performance real-time listener:
+  // 1. Dedicated query for active kitchen orders (pending, preparing, ready) - instant delivery
+  // 2. Bounded query for recent orders (limit 80) for history view without bogging down the database
   useEffect(() => {
-    const q = query(collection(db, 'orders'), orderBy('created_at', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      
-      // Check for new orders to show notification
-      const lastOrder = data[0];
-      if (lastOrder && lastOrder.status === 'pending') {
-        const orderTime = new Date(lastOrder.created_at).getTime();
-        const now = new Date().getTime();
-        if (now - orderTime < 10000) { // If order is less than 10 seconds old
-          setShowNotification(true);
-          if (audioEnabledRef.current && audioRef.current) {
-            audioRef.current.play().catch(e => console.log('Audio play blocked:', e));
+    const qActive = query(
+      collection(db, 'orders'),
+      where('status', 'in', ['pending', 'preparing', 'ready'])
+    );
+
+    const qRecent = query(
+      collection(db, 'orders'),
+      orderBy('created_at', 'desc'),
+      limit(80)
+    );
+
+    let activeMap = new Map<string, Order>();
+    let recentMap = new Map<string, Order>();
+
+    const mergeAndSetOrders = () => {
+      const mergedMap = new Map<string, Order>();
+      // First populate recent orders
+      recentMap.forEach((ord, id) => mergedMap.set(id, ord));
+      // Then ensure all active orders are included/updated
+      activeMap.forEach((ord, id) => mergedMap.set(id, ord));
+
+      const allOrders = Array.from(mergedMap.values()).sort(
+        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+      setOrders(allOrders);
+    };
+
+    const unsubActive = onSnapshot(qActive, (snapshot) => {
+      const currentMap = new Map<string, Order>();
+      let newlyArrivedPending: Order | null = null;
+
+      snapshot.docs.forEach(d => {
+        const order = { id: d.id, ...d.data() } as Order;
+        currentMap.set(d.id, order);
+      });
+
+      if (initialLoadRef.current) {
+        initialLoadRef.current = false;
+        snapshot.docs.forEach(d => knownOrderIdsRef.current.add(d.id));
+      } else {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const order = { id: change.doc.id, ...change.doc.data() } as Order;
+            if (!knownOrderIdsRef.current.has(order.id) && order.status === 'pending') {
+              newlyArrivedPending = order;
+            }
+            knownOrderIdsRef.current.add(order.id);
           }
-          setTimeout(() => setShowNotification(false), 8000);
-        }
+        });
       }
 
-      setOrders(data);
+      activeMap = currentMap;
+      mergeAndSetOrders();
+
+      if (newlyArrivedPending) {
+        triggerOrderAlert(newlyArrivedPending);
+      }
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'orders');
+      handleFirestoreError(error, OperationType.LIST, 'orders/active');
     });
-    return () => unsubscribe();
+
+    const unsubRecent = onSnapshot(qRecent, (snapshot) => {
+      const currentMap = new Map<string, Order>();
+      snapshot.docs.forEach(d => {
+        const order = { id: d.id, ...d.data() } as Order;
+        currentMap.set(d.id, order);
+      });
+      recentMap = currentMap;
+      mergeAndSetOrders();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders/recent');
+    });
+
+    return () => {
+      unsubActive();
+      unsubRecent();
+    };
   }, []);
 
   const updateStatus = async (id: string, status: string) => {
@@ -2632,7 +2770,11 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
             </div>
             <div>
               <p className="font-bold text-lg">Novo Pedido Recebido!</p>
-              <p className="text-xs text-emerald-100">Verifique a lista de pedidos ativos.</p>
+              <p className="text-xs text-emerald-100 font-medium">
+                {latestNewOrder 
+                  ? (latestNewOrder.type === 'table' ? `Mesa ${latestNewOrder.table_number || ''} • Total: R$ ${latestNewOrder.total_price.toFixed(2)}` : latestNewOrder.type === 'counter' ? `Balcão • Total: R$ ${latestNewOrder.total_price.toFixed(2)}` : `Delivery: ${latestNewOrder.delivery_info?.name || 'Cliente'} • R$ ${latestNewOrder.total_price.toFixed(2)}`)
+                  : 'Verifique a lista de pedidos ativos.'}
+              </p>
             </div>
             <button onClick={() => setShowNotification(false)} className="ml-4 hover:bg-white/10 p-1 rounded-lg">
               <X size={20} />
@@ -2669,13 +2811,18 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => {
-              setAudioEnabled(!audioEnabled);
-              if (!audioEnabled && audioRef.current) {
-                audioRef.current.play().catch(() => {});
+              const nextState = !audioEnabled;
+              setAudioEnabled(nextState);
+              if (nextState) {
+                playInstantChime();
+                if (audioRef.current) {
+                  audioRef.current.currentTime = 0;
+                  audioRef.current.play().catch(() => {});
+                }
               }
             }}
             className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl border transition-all text-xs font-bold uppercase tracking-widest",
+              "flex items-center gap-2 px-4 py-2 rounded-xl border transition-all text-xs font-bold uppercase tracking-widest cursor-pointer",
               audioEnabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-stone-800 text-stone-500 border-stone-700 hover:text-white"
             )}
           >
@@ -2961,12 +3108,16 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
           created_at: new Date().toISOString()
         };
 
-        await addDoc(collection(db, 'orders'), orderData);
+        const batch = writeBatch(db);
+        const newOrderRef = doc(collection(db, 'orders'));
+        batch.set(newOrderRef, orderData);
 
         // If it's a regular table (not counter or delivery), mark it as occupied
         if (table) {
-          await updateDoc(doc(db, 'tables', table.id), { status: 'occupied' });
+          batch.update(doc(db, 'tables', table.id), { status: 'occupied' });
         }
+
+        await batch.commit();
 
         setCart([]);
         setOrderSent(true);
