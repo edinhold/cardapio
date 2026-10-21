@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY package*.json .npmrc* ./
 RUN npm install
 
 COPY . .
@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/package*.json /app/.npmrc* ./
 # Install only production dependencies
 RUN npm install --omit=dev
 
