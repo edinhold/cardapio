@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   UtensilsCrossed, 
@@ -35,7 +35,11 @@ import {
   AlertCircle,
   QrCode,
   FileText,
-  UserCheck
+  UserCheck,
+  Volume2,
+  VolumeX,
+  RotateCcw,
+  RefreshCw
 } from 'lucide-react';
 import { ReportsManagement } from './components/ReportsManagement';
 import { CustomersManagement } from './components/CustomersManagement';
@@ -187,6 +191,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 // --- Shared Utilities ---
 
+const parseOrderDate = (val: any): Date => {
+  if (!val) return new Date();
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val.toMillis === 'function') return new Date(val.toMillis());
+  if (typeof val === 'number') return new Date(val);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? new Date() : d;
+};
+
 const printHtml = (title: string, htmlContent: string) => {
   try {
     const printWindow = window.open('', '_blank');
@@ -228,6 +241,12 @@ const printHtml = (title: string, htmlContent: string) => {
 };
 
 const handlePrint = (order: Order) => {
+  const orderDate = parseOrderDate(order.created_at);
+  const orderId = order.id || '';
+  const shortId = orderId.length > 4 ? orderId.slice(-4).toUpperCase() : (orderId || '0000').toUpperCase();
+  const safeItems = order.items || [];
+  const safeTotal = typeof order.total_price === 'number' ? order.total_price : 0;
+
   printHtml(`Pedido #${order.id}`, `
     <html>
       <head>
@@ -250,27 +269,27 @@ const handlePrint = (order: Order) => {
         </div>
         <div class="header">
           <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <h2 style="margin: 0;">PEDIDO #${order.id.slice(-4).toUpperCase()}</h2>
-            <span>${new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <h2 style="margin: 0;">PEDIDO #${shortId}</h2>
+            <span>${orderDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           <p style="font-weight: bold; font-size: 1.2em; margin: 5px 0;">
-            ${order.type === 'delivery' ? 'DELIVERY' : (order.type === 'counter' ? 'BALCÃO' : `MESA: ${order.table_number}`)}
+            ${order.type === 'delivery' ? 'DELIVERY' : (order.type === 'counter' ? 'BALCÃO' : `MESA: ${order.table_number || order.table_id || 'Mesa'}`)}
           </p>
           ${order.delivery_info ? `
             <div class="delivery-info">
               <p style="margin: 0; font-weight: bold;">Cliente: ${order.delivery_info.name}</p>
-              <p style="margin: 0; font-size: 0.9em;">Tel: ${order.delivery_info.phone}</p>
-              <p style="margin: 0; font-size: 0.9em;">End: ${order.delivery_info.address}</p>
+              <p style="margin: 0; font-size: 0.9em;">Tel: ${order.delivery_info.phone || ''}</p>
+              <p style="margin: 0; font-size: 0.9em;">End: ${order.delivery_info.address || ''}</p>
             </div>
           ` : ''}
         </div>
 
         <div class="content">
-          ${order.items.map(item => `
+          ${safeItems.map(item => `
             <div style="margin-bottom: 10px;">
               <div class="item">
-                <span style="font-weight: bold;">${item.quantity}x ${item.name}</span>
-                <span>R$ ${(item.price_at_time * item.quantity).toFixed(2)}</span>
+                <span style="font-weight: bold;">${item.quantity || 1}x ${item.name || 'Item'}</span>
+                <span>R$ ${((item.price_at_time || 0) * (item.quantity || 1)).toFixed(2)}</span>
               </div>
               ${item.observation ? `<div class="obs">Obs: ${item.observation}</div>` : ''}
               ${item.addons && item.addons.length > 0 ? `
@@ -285,10 +304,10 @@ const handlePrint = (order: Order) => {
         <div class="footer">
           <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.2em;">
             <span>TOTAL</span>
-            <span>R$ ${order.total_price.toFixed(2)}</span>
+            <span>R$ ${safeTotal.toFixed(2)}</span>
           </div>
           <p style="text-align: center; font-size: 0.7em; margin-top: 20px; opacity: 0.5;">
-            ${new Date(order.created_at).toLocaleString()}
+            ${orderDate.toLocaleString()}
           </p>
         </div>
         <script>
@@ -305,16 +324,16 @@ const handlePrint = (order: Order) => {
 const consolidateItems = (orders: Order[]) => {
   const consolidated: { [key: string]: { name: string; quantity: number; price_at_time: number; addons: any[] } } = {};
   orders.forEach(order => {
-    order.items.forEach(item => {
+    (order.items || []).forEach(item => {
       const addonNames = item.addons ? item.addons.map(a => a.name).sort().join(',') : '';
-      const key = `${item.item_id || item.name}_${addonNames}`;
+      const key = `${item.item_id || item.name || 'item'}_${addonNames}`;
       if (consolidated[key]) {
-        consolidated[key].quantity += item.quantity;
+        consolidated[key].quantity += (item.quantity || 1);
       } else {
         consolidated[key] = {
-          name: item.name,
-          quantity: item.quantity,
-          price_at_time: item.price_at_time,
+          name: item.name || 'Item',
+          quantity: item.quantity || 1,
+          price_at_time: item.price_at_time || 0,
           addons: item.addons || []
         };
       }
@@ -545,20 +564,48 @@ function cn(...inputs: ClassValue[]) {
 
 // --- Components ---
 
-const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }: { icon: any, label: string, active: boolean, onClick: () => void, collapsed?: boolean }) => (
+const SidebarItem = ({ 
+  icon: Icon, 
+  label, 
+  active, 
+  onClick, 
+  collapsed,
+  badge
+}: { 
+  icon: any, 
+  label: string, 
+  active: boolean, 
+  onClick: () => void, 
+  collapsed?: boolean,
+  badge?: number
+}) => (
   <button
     onClick={onClick}
     title={collapsed ? label : undefined}
     className={cn(
-      "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+      "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 relative",
       collapsed ? "justify-center px-2" : "px-4",
       active 
         ? "bg-stone-900 text-white shadow-lg shadow-stone-200" 
         : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
     )}
   >
-    <Icon size={20} className="shrink-0" />
-    {!collapsed && <span className="font-medium whitespace-nowrap overflow-hidden">{label}</span>}
+    <div className="flex items-center gap-3 overflow-hidden">
+      <Icon size={20} className="shrink-0" />
+      {!collapsed && <span className="font-medium whitespace-nowrap overflow-hidden">{label}</span>}
+    </div>
+    {badge != null && badge > 0 && (
+      collapsed ? (
+        <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+      ) : (
+        <span className={cn(
+          "px-2 py-0.5 text-xs font-bold rounded-full",
+          active ? "bg-red-500 text-white" : "bg-red-100 text-red-600"
+        )}>
+          {badge}
+        </span>
+      )
+    )}
   </button>
 );
 
@@ -572,52 +619,42 @@ const StatCard = ({ label, value, trend }: { label: string, value: string, trend
 
 // --- Views ---
 
-const AdminDashboard = () => {
-  const [stats, setStats] = useState<SalesStats | null>(null);
-  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
+const AdminDashboard = ({ orders = [] }: { orders?: Order[] }) => {
   const [orderFilter, setOrderFilter] = useState<'all' | 'counter' | 'table' | 'delivery'>('all');
 
-  useEffect(() => {
-    const q = query(collection(db, 'orders'), orderBy('created_at', 'desc'), limit(50));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      setRecentOrders(orders);
-      
-      // Calculate stats on client side
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      const thisWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime();
-      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const recentOrders = useMemo(() => orders.slice(0, 50), [orders]);
 
-      let daily = 0;
-      let weekly = 0;
-      let monthly = 0;
-      const salesMap: Record<string, number> = {};
+  const stats = useMemo<SalesStats>(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const thisWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime();
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
-      orders.forEach(o => {
-        if (o.status === 'canceled') return;
-        const date = new Date(o.created_at);
-        const time = date.getTime();
-        const dateStr = date.toLocaleDateString();
+    let daily = 0;
+    let weekly = 0;
+    let monthly = 0;
+    const salesMap: Record<string, number> = {};
 
-        if (time >= today) daily += o.total_price;
-        if (time >= thisWeek) weekly += o.total_price;
-        if (time >= thisMonth) monthly += o.total_price;
+    orders.forEach(o => {
+      if (o.status === 'canceled') return;
+      const date = new Date(o.created_at);
+      const time = date.getTime();
+      const dateStr = date.toLocaleDateString();
 
-        salesMap[dateStr] = (salesMap[dateStr] || 0) + o.total_price;
-      });
+      if (time >= today) daily += o.total_price;
+      if (time >= thisWeek) weekly += o.total_price;
+      if (time >= thisMonth) monthly += o.total_price;
 
-      const salesOverTime = Object.entries(salesMap)
-        .map(([date, total]) => ({ date, total }))
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-        .slice(-7);
-
-      setStats({ daily, weekly, monthly, salesOverTime });
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'orders');
+      salesMap[dateStr] = (salesMap[dateStr] || 0) + o.total_price;
     });
-    return () => unsubscribe();
-  }, []);
+
+    const salesOverTime = Object.entries(salesMap)
+      .map(([date, total]) => ({ date, total }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .slice(-7);
+
+    return { daily, weekly, monthly, salesOverTime };
+  }, [orders]);
 
   const handleSystemReset = async () => {
     if (!window.confirm('ATENÇÃO: Isso apagará TODOS os pedidos e resetará o status das mesas. Esta ação não pode ser desfeita. Deseja continuar?')) return;
@@ -1371,12 +1408,20 @@ const EmployeeManagement = () => {
   );
 };
 
-const TableManagement = () => {
-  const [tables, setTables] = useState<Table[]>([]);
+const TableManagement = ({ 
+  tables: initialTables = [], 
+  allOrders = [],
+  initialSelectedTable = null,
+  onSelectTable
+}: { 
+  tables?: Table[]; 
+  allOrders?: Order[]; 
+  initialSelectedTable?: Table | 'counter' | null;
+  onSelectTable?: (t: Table | 'counter' | null) => void;
+}) => {
+  const [localTables, setLocalTables] = useState<Table[]>(initialTables);
   const [number, setNumber] = useState('');
-  const [selectedTable, setSelectedTable] = useState<Table | 'counter' | null>(null);
-  const [tableOrders, setTableOrders] = useState<Order[]>([]);
-  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [selectedTable, setSelectedTable] = useState<Table | 'counter' | null>(initialSelectedTable);
   const [showReceipt, setShowReceipt] = useState<{
     tableNumber: string | number;
     orders: Order[];
@@ -1386,51 +1431,62 @@ const TableManagement = () => {
   const [qrModalTable, setQrModalTable] = useState<Table | null>(null);
 
   useEffect(() => {
+    if (initialTables.length > 0) {
+      setLocalTables(initialTables);
+      return;
+    }
     const q = query(collection(db, 'tables'), orderBy('number'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Table));
-      setTables(data);
+      setLocalTables(data);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'tables');
     });
     return () => unsubscribe();
-  }, []);
+  }, [initialTables]);
 
   useEffect(() => {
-    if (!selectedTable) {
-      setTableOrders([]);
-      return;
+    if (initialSelectedTable !== undefined) {
+      setSelectedTable(initialSelectedTable);
     }
+  }, [initialSelectedTable]);
 
-    setLoadingOrders(true);
-    const tableId = selectedTable === 'counter' ? 'counter' : selectedTable.id;
-    const q = query(
-      collection(db, 'orders'),
-      where('table_id', '==', tableId)
-    );
+  const tables = initialTables.length > 0 ? initialTables : localTables;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      const activeOrders = data
-        .filter(o => o.status !== 'paid' && o.status !== 'canceled')
-        .sort((a, b) => {
-          if (a.status !== b.status) {
-            return a.status.localeCompare(b.status);
-          }
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        });
-      setTableOrders(activeOrders);
-      setLoadingOrders(false);
-    }, (err) => {
-      setLoadingOrders(false);
-      handleFirestoreError(err, OperationType.LIST, 'orders');
+  const getOrdersForTable = (t: Table | 'counter') => {
+    if (t === 'counter') {
+      return allOrders.filter(o => {
+        const st = (o.status || '').toLowerCase();
+        const isNotClosed = st !== 'paid' && st !== 'pago' && st !== 'canceled' && st !== 'cancelado';
+        const isCounterOrder = o.type === 'counter' || o.table_id === 'counter' || String(o.table_id) === 'counter';
+        return isCounterOrder && isNotClosed;
+      });
+    }
+    return allOrders.filter(o => {
+      const st = (o.status || '').toLowerCase();
+      const isNotClosed = st !== 'paid' && st !== 'pago' && st !== 'canceled' && st !== 'cancelado';
+      const isMatch = (o.table_id === t.id || 
+       o.table_id === t.number || 
+       String(o.table_id) === String(t.number) || 
+       o.table_number === t.number);
+      return isMatch && isNotClosed;
     });
+  };
 
-    return () => unsubscribe();
-  }, [selectedTable]);
+  const tableOrders = useMemo(() => {
+    if (!selectedTable) return [];
+    const list = getOrdersForTable(selectedTable);
+    return [...list].sort((a, b) => {
+      if (a.status !== b.status) {
+        return a.status.localeCompare(b.status);
+      }
+      return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+    });
+  }, [selectedTable, allOrders]);
 
   const handleTableClick = (table: Table | 'counter') => {
     setSelectedTable(table);
+    if (onSelectTable) onSelectTable(table);
   };
 
   const closeBill = async () => {
@@ -1531,7 +1587,7 @@ const TableManagement = () => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-3xl border border-stone-100 shadow-sm">
         <div>
           <h2 className="text-2xl font-bold italic">Roteiro do Salão</h2>
-          <p className="text-stone-500 text-sm">Gerencie o layout físico das mesas, imprima QR codes de atendimento ou acompanhe os extratos.</p>
+          <p className="text-stone-500 text-sm">Gerencie o layout físico das mesas, acompanhe pedidos ativos e extratos em tempo real.</p>
         </div>
         <button
           onClick={() => {
@@ -1564,54 +1620,102 @@ const TableManagement = () => {
           </form>
         </div>
         <div className="lg:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <button 
-            onClick={() => handleTableClick('counter')}
-            className={cn(
-              "bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
-              selectedTable === 'counter' && "border-stone-900 ring-1 ring-stone-900"
-            )}
-          >
-            <div className="bg-stone-900 p-3 rounded-full text-white mb-1">
-              <Coffee size={24} />
-            </div>
-            <span className="font-bold text-xl">Balcão</span>
-            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
-              Pedidos Diretos
-            </span>
-          </button>
+          {(() => {
+            const counterOrders = getOrdersForTable('counter');
+            const counterTotal = counterOrders.reduce((sum, o) => sum + o.total_price, 0);
+            const hasPendingCounter = counterOrders.some(o => o.status === 'pending');
 
-          {tables.map(table => (
-            <button 
-              key={table.id} 
-              onClick={() => handleTableClick(table)}
-              className="bg-white p-6 rounded-2xl border border-stone-100 flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm"
-            >
+            return (
               <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setQrModalTable(table);
-                }}
-                className="absolute top-2 left-2 p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-50 rounded-lg transition-all"
-                title="QR Code da Mesa"
+                onClick={() => handleTableClick('counter')}
+                className={cn(
+                  "bg-white p-5 rounded-2xl border flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
+                  selectedTable === 'counter' ? "border-stone-900 ring-2 ring-stone-900" : "border-stone-100",
+                  hasPendingCounter && "ring-2 ring-amber-400 bg-amber-50/20"
+                )}
               >
-                <QrCode size={16} />
+                <div className="relative">
+                  <div className="bg-stone-900 p-3 rounded-full text-white mb-1">
+                    <Coffee size={24} />
+                  </div>
+                  {hasPendingCounter && (
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full animate-ping" />
+                  )}
+                </div>
+                <span className="font-bold text-xl">Balcão</span>
+                <span className={cn(
+                  "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                  counterOrders.length > 0 ? "bg-amber-100 text-amber-800" : "bg-stone-100 text-stone-600"
+                )}>
+                  {counterOrders.length > 0 ? `${counterOrders.length} ${counterOrders.length === 1 ? 'pedido' : 'pedidos'}` : 'Pedidos Diretos'}
+                </span>
+                {counterTotal > 0 && (
+                  <span className="text-xs font-bold text-stone-900 font-mono">
+                    R$ {counterTotal.toFixed(2)}
+                  </span>
+                )}
               </button>
+            );
+          })()}
+
+          {tables.map(table => {
+            const activeTableOrders = getOrdersForTable(table);
+            const totalBill = activeTableOrders.reduce((sum, o) => sum + o.total_price, 0);
+            const hasPending = activeTableOrders.some(o => o.status === 'pending');
+            const isOccupied = table.status === 'occupied' || activeTableOrders.length > 0;
+
+            return (
               <button 
-                onClick={(e) => deleteTable(e, table.id)}
-                className="absolute top-2 right-2 p-1.5 text-stone-300 hover:text-red-500 hover:bg-stone-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                key={table.id} 
+                onClick={() => handleTableClick(table)}
+                className={cn(
+                  "bg-white p-5 rounded-2xl border flex flex-col items-center gap-2 hover:border-stone-300 transition-all text-center relative group shadow-sm",
+                  selectedTable && typeof selectedTable !== 'string' && selectedTable.id === table.id 
+                    ? "border-stone-900 ring-2 ring-stone-900" 
+                    : "border-stone-100",
+                  hasPending && "ring-2 ring-amber-400 bg-amber-50/20"
+                )}
               >
-                <Trash2 size={14} />
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setQrModalTable(table);
+                  }}
+                  className="absolute top-2 left-2 p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-50 rounded-lg transition-all"
+                  title="QR Code da Mesa"
+                >
+                  <QrCode size={16} />
+                </button>
+                <button 
+                  onClick={(e) => deleteTable(e, table.id)}
+                  className="absolute top-2 right-2 p-1.5 text-stone-300 hover:text-red-500 hover:bg-stone-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                >
+                  <Trash2 size={14} />
+                </button>
+
+                <div className="relative mt-1">
+                  <TableIcon size={32} className={cn(isOccupied ? "text-amber-500" : "text-stone-300")} />
+                  {hasPending && (
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full animate-ping" />
+                  )}
+                </div>
+
+                <span className="font-bold text-xl">Mesa {table.number}</span>
+                <span className={cn(
+                  "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
+                  !isOccupied ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"
+                )}>
+                  {!isOccupied ? 'Disponível' : `${activeTableOrders.length} ${activeTableOrders.length === 1 ? 'pedido' : 'pedidos'}`}
+                </span>
+
+                {isOccupied && totalBill > 0 && (
+                  <span className="text-xs font-bold text-stone-900 font-mono">
+                    R$ {totalBill.toFixed(2)}
+                  </span>
+                )}
               </button>
-              <TableIcon size={32} className={cn(table.status === 'available' ? "text-stone-300" : "text-red-400")} />
-              <span className="font-bold text-xl">Mesa {table.number}</span>
-              <span className={cn(
-                "text-[10px] font-bold uppercase px-2 py-0.5 rounded-full",
-                table.status === 'available' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-              )}>
-                {table.status === 'available' ? 'Disponível' : 'Ocupada'}
-              </span>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -1631,73 +1735,104 @@ const TableManagement = () => {
                 <button onClick={() => setSelectedTable(null)} className="text-stone-400 hover:text-stone-900"><X /></button>
               </div>
 
-              {loadingOrders ? (
-                <div className="py-10 text-center text-stone-400">Carregando pedidos...</div>
-              ) : (
-                <div className="space-y-6">
+              <div className="space-y-6">
                   {tableOrders.length === 0 ? (
                     <div className="py-10 text-center text-stone-400 bg-stone-50 rounded-2xl border border-dashed border-stone-200">
-                      Nenhum pedido em aberto para esta mesa.
+                      {selectedTable === 'counter' ? 'Nenhum pedido em aberto no balcão.' : 'Nenhum pedido em aberto para esta mesa.'}
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {tableOrders.map(order => (
-                        <div key={order.id} className="border-b border-stone-100 pb-4 last:border-0">
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-stone-900">Pedido #{order.id}</span>
-                              <span className={cn(
-                                "text-[9px] uppercase font-bold px-1.5 py-0.5 rounded",
-                                order.status === 'pending' && "bg-stone-100 text-stone-500",
-                                order.status === 'preparing' && "bg-amber-100 text-amber-700",
-                                order.status === 'ready' && "bg-blue-100 text-blue-700",
-                                order.status === 'delivered' && "bg-emerald-100 text-emerald-700"
-                              )}>
-                                {order.status}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              {order.status !== 'paid' && order.status !== 'canceled' && (
+                      {tableOrders.map(order => {
+                        const st = (order.status as string || '').toLowerCase();
+                        const isPending = st === 'pending' || st === 'pendente';
+                        const isPreparing = st === 'preparing' || st === 'preparando';
+                        const isReady = st === 'ready' || st === 'pronto';
+                        const isDelivered = st === 'delivered' || st === 'entregue';
+
+                        return (
+                          <div key={order.id} className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 space-y-3">
+                            <div className="flex justify-between items-start">
+                              <div>
                                 <div className="flex items-center gap-2">
-                                  <button 
-                                    onClick={() => closeOrder(order)}
-                                    className="text-[10px] text-emerald-600 hover:underline flex items-center gap-1"
-                                  >
-                                    <CheckCircle2 size={10} /> Fechar
-                                  </button>
-                                  <button 
-                                    onClick={() => cancelOrder(order.id)}
-                                    className="text-[10px] text-red-500 hover:underline flex items-center gap-1"
-                                  >
-                                    <Trash2 size={10} /> Cancelar
-                                  </button>
+                                  <span className="font-black text-stone-900 text-sm">
+                                    {order.delivery_info?.name 
+                                      ? `${order.delivery_info.name} • #${(order.id || '').slice(-4).toUpperCase()}` 
+                                      : `Pedido #${(order.id || '').slice(-6).toUpperCase()}`}
+                                  </span>
+                                  <span className={cn(
+                                    "text-[9px] uppercase font-black px-2 py-0.5 rounded-full",
+                                    isPending && "bg-amber-100 text-amber-800",
+                                    isPreparing && "bg-blue-100 text-blue-800",
+                                    isReady && "bg-emerald-100 text-emerald-800",
+                                    isDelivered && "bg-purple-100 text-purple-800"
+                                  )}>
+                                    {isPending ? 'Pendente' : 
+                                     isPreparing ? 'Em Preparo' : 
+                                     isReady ? 'Pronto' : 
+                                     isDelivered ? 'Entregue' : order.status}
+                                  </span>
                                 </div>
-                              )}
-                              <span className="text-stone-500 text-xs">{new Date(order.created_at).toLocaleTimeString()}</span>
+                                <span className="text-stone-400 text-xs font-mono">
+                                  {parseOrderDate(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-base font-black text-stone-900">
+                                  R$ {(order.total_price || 0).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {/* Items */}
+                            <div className="space-y-1 bg-white p-3 rounded-xl border border-stone-100">
+                              {(order.items || []).map((item, idx) => (
+                                <div key={idx} className="space-y-0.5">
+                                  <div className="flex justify-between text-xs">
+                                    <span className="text-stone-700 font-medium">{item.quantity || 1}x {item.name}</span>
+                                    <span className="text-stone-500 font-mono">R$ {((item.price_at_time || 0) * (item.quantity || 1)).toFixed(2)}</span>
+                                  </div>
+                                  {item.observation && (
+                                    <p className="text-[10px] text-amber-600 italic">Obs: {item.observation}</p>
+                                  )}
+                                  {item.addons && item.addons.length > 0 && (
+                                    <div className="text-[10px] text-emerald-600">
+                                      {item.addons.map(a => `+ ${a.name}`).join(', ')}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Order Actions */}
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                              <button 
+                                onClick={() => handlePrint(order)}
+                                className="p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-200 rounded-xl transition-all"
+                                title="Imprimir Comanda"
+                              >
+                                <Printer size={15} />
+                              </button>
+                              <button 
+                                onClick={() => cancelOrder(order.id)}
+                                className="px-3 py-1.5 text-xs font-bold text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                              >
+                                Cancelar
+                              </button>
+                              <button 
+                                onClick={() => closeOrder(order)}
+                                className="px-4 py-1.5 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95"
+                              >
+                                <CheckCircle2 size={14} /> Receber Pedido
+                              </button>
                             </div>
                           </div>
-                          <div className="space-y-2">
-                            {order.items.map((item, idx) => (
-                              <div key={idx} className="space-y-0.5">
-                                <div className="flex justify-between text-sm">
-                                  <span className="text-stone-600 font-medium">{item.quantity}x {item.name}</span>
-                                  <span className="text-stone-400">R$ {(item.price_at_time * item.quantity).toFixed(2)}</span>
-                                </div>
-                                {item.addons && item.addons.length > 0 && (
-                                  <div className="pl-4 text-[10px] text-emerald-600 italic">
-                                    {item.addons.map(a => `+ ${a.name}`).join(', ')}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
                   <div className="pt-4 border-t-2 border-stone-900 flex justify-between items-center">
-                    <span className="text-xl font-bold uppercase tracking-widest">Total</span>
+                    <span className="text-xl font-bold uppercase tracking-widest">Total Aberto</span>
                     <span className="text-2xl font-bold text-stone-900">R$ {tableTotal.toFixed(2)}</span>
                   </div>
 
@@ -1705,9 +1840,9 @@ const TableManagement = () => {
                     <div className="flex gap-3">
                       <button 
                         onClick={() => setShowMenuModal(selectedTable === 'counter' ? 'counter' : selectedTable!.id)}
-                        className="flex-1 bg-stone-100 text-stone-900 py-4 rounded-full font-bold text-sm hover:bg-stone-200 transition-all flex items-center justify-center gap-1.5"
+                        className="flex-1 bg-stone-900 text-white py-4 rounded-full font-bold text-sm hover:bg-stone-800 transition-all flex items-center justify-center gap-1.5 shadow-md"
                       >
-                        <PlusCircle size={18} /> Novo Pedido
+                        <PlusCircle size={18} /> {selectedTable === 'counter' ? 'Novo Pedido Balcão' : 'Novo Pedido'}
                       </button>
                       
                       {tableOrders.length > 0 && (
@@ -1731,17 +1866,16 @@ const TableManagement = () => {
                     >
                       {tableOrders.length > 0 ? (
                         <>
-                          <CheckCircle2 size={22} /> Fechar Conta
+                          <CheckCircle2 size={22} /> {selectedTable === 'counter' ? 'Fechar Todos os Pedidos do Balcão' : 'Fechar Conta'}
                         </>
                       ) : (
                         <>
-                          <X size={22} /> Liberar Mesa
+                          <X size={22} /> {selectedTable === 'counter' ? 'Fechar Janela' : 'Liberar Mesa'}
                         </>
                       )}
                     </button>
                   </div>
                 </div>
-              )}
             </motion.div>
           </div>
         )}
@@ -2069,8 +2203,8 @@ const AddonManagement = () => {
   );
 };
 
-const DeliveryManagement = () => {
-  const [orders, setOrders] = useState<Order[]>([]);
+const DeliveryManagement = ({ allOrders = [] }: { allOrders?: Order[] }) => {
+  const [localOrders, setLocalOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [showMenuModal, setShowMenuModal] = useState(false);
   const [showReceipt, setShowReceipt] = useState<{
@@ -2079,23 +2213,16 @@ const DeliveryManagement = () => {
   } | null>(null);
 
   useEffect(() => {
+    if (allOrders.length > 0) return;
     setLoading(true);
     const q = query(
       collection(db, 'orders'),
-      where('table_id', '==', -2)
+      where('status', 'in', ['pending', 'preparing', 'ready', 'delivered'])
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-      const activeOrders = data
-        .filter(o => o.status !== 'paid' && o.status !== 'canceled')
-        .sort((a, b) => {
-          if (a.status !== b.status) {
-            return a.status.localeCompare(b.status);
-          }
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        });
-      setOrders(activeOrders);
+      setLocalOrders(data);
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'orders');
@@ -2103,7 +2230,24 @@ const DeliveryManagement = () => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [allOrders.length]);
+
+  const sourceOrders = allOrders.length > 0 ? allOrders : localOrders;
+
+  const orders = useMemo(() => {
+    return sourceOrders
+      .filter(o => 
+        (o.type === 'delivery' || o.table_id === -2 || String(o.table_id) === '-2') && 
+        o.status !== 'paid' && 
+        o.status !== 'canceled'
+      )
+      .sort((a, b) => {
+        if (a.status !== b.status) {
+          return a.status.localeCompare(b.status);
+        }
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+      });
+  }, [sourceOrders]);
 
   const closeAll = async () => {
     if (orders.length === 0) return;
@@ -2313,6 +2457,171 @@ const DeliveryManagement = () => {
 const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void; currentUser?: any }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'menu' | 'employees' | 'tables' | 'addons' | 'delivery' | 'reports' | 'customers'>('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [tables, setTables] = useState<Table[]>([]);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [newOrderAlert, setNewOrderAlert] = useState<{ id: string; title: string; total: number; type: string } | null>(null);
+  const [selectedTableForManagement, setSelectedTableForManagement] = useState<Table | 'counter' | null>(null);
+
+  const initialLoadRef = useRef(true);
+  const knownOrderIdsRef = useRef<Set<string>>(new Set());
+
+  const playAdminChime = () => {
+    if (!audioEnabled) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc2.type = 'triangle';
+      osc1.frequency.setValueAtTime(880, now);
+      osc1.frequency.exponentialRampToValueAtTime(1320, now + 0.15);
+      osc2.frequency.setValueAtTime(659.25, now + 0.15);
+      osc2.frequency.exponentialRampToValueAtTime(1046.5, now + 0.35);
+
+      gain.gain.setValueAtTime(0.35, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(now);
+      osc1.stop(now + 0.5);
+      osc2.start(now + 0.15);
+      osc2.stop(now + 0.5);
+    } catch (e) {
+      console.warn('Admin chime audio error:', e);
+    }
+  };
+
+  useEffect(() => {
+    // 1. High-priority listener for all active orders
+    const qActive = query(
+      collection(db, 'orders'),
+      where('status', 'in', ['pending', 'preparing', 'ready', 'delivered'])
+    );
+
+    // 2. Recent orders for dashboard metrics and history
+    const qRecent = query(
+      collection(db, 'orders'),
+      orderBy('created_at', 'desc'),
+      limit(100)
+    );
+
+    let activeMap = new Map<string, Order>();
+    let recentMap = new Map<string, Order>();
+
+    const mergeAndSetOrders = () => {
+      const merged = new Map<string, Order>();
+      recentMap.forEach((ord, id) => merged.set(id, ord));
+      activeMap.forEach((ord, id) => merged.set(id, ord));
+      const list = Array.from(merged.values()).sort(
+        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+      setOrders(list);
+    };
+
+    const unsubActive = onSnapshot(qActive, (snapshot) => {
+      const currentMap = new Map<string, Order>();
+      let latestPending: Order | null = null;
+
+      snapshot.docs.forEach(d => {
+        const ord = { id: d.id, ...d.data() } as Order;
+        currentMap.set(d.id, ord);
+      });
+
+      if (initialLoadRef.current) {
+        initialLoadRef.current = false;
+        snapshot.docs.forEach(d => knownOrderIdsRef.current.add(d.id));
+      } else {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const ord = { id: change.doc.id, ...change.doc.data() } as Order;
+            if (!knownOrderIdsRef.current.has(ord.id) && ord.status === 'pending') {
+              latestPending = ord;
+            }
+            knownOrderIdsRef.current.add(ord.id);
+          }
+        });
+
+        if (latestPending) {
+          playAdminChime();
+          const p = latestPending as Order;
+          const label = p.type === 'delivery' 
+            ? 'Delivery' 
+            : p.type === 'counter' 
+              ? 'Balcão' 
+              : `Mesa ${p.table_number || '?'}`;
+
+          setNewOrderAlert({
+            id: p.id,
+            title: `Novo pedido recebido: ${label}`,
+            total: p.total_price,
+            type: p.type
+          });
+
+          setTimeout(() => setNewOrderAlert(null), 10000);
+        }
+      }
+
+      activeMap = currentMap;
+      mergeAndSetOrders();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+    });
+
+    const unsubRecent = onSnapshot(qRecent, (snapshot) => {
+      const currentMap = new Map<string, Order>();
+      snapshot.docs.forEach(d => {
+        const ord = { id: d.id, ...d.data() } as Order;
+        currentMap.set(d.id, ord);
+        knownOrderIdsRef.current.add(d.id);
+      });
+      recentMap = currentMap;
+      mergeAndSetOrders();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
+    });
+
+    // Tables real-time listener
+    const unsubTables = onSnapshot(query(collection(db, 'tables'), orderBy('number')), (snapshot) => {
+      setTables(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Table)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'tables');
+    });
+
+    return () => {
+      unsubActive();
+      unsubRecent();
+      unsubTables();
+    };
+  }, [audioEnabled]);
+
+  const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
+  
+  const activeTablesCount = tables.filter(t => 
+    t.status === 'occupied' || 
+    orders.some(o => 
+      (o.table_id === t.id || o.table_number === t.number || String(o.table_id) === String(t.number)) && 
+      o.status !== 'paid' && 
+      o.status !== 'canceled'
+    )
+  ).length;
+
+  const activeDeliveryCount = orders.filter(o => 
+    (o.type === 'delivery' || o.table_id === -2 || String(o.table_id) === '-2') && 
+    o.status !== 'paid' && 
+    o.status !== 'canceled'
+  ).length;
 
   return (
     <div className="flex min-h-screen bg-stone-50">
@@ -2335,14 +2644,65 @@ const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'custo
         </div>
         
         <nav className="flex flex-col gap-2">
-          <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} collapsed={isCollapsed} />
-          <SidebarItem icon={UtensilsCrossed} label="Cardápio" active={activeTab === 'menu'} onClick={() => setActiveTab('menu')} collapsed={isCollapsed} />
-          <SidebarItem icon={PlusCircle} label="Adicionais" active={activeTab === 'addons'} onClick={() => setActiveTab('addons')} collapsed={isCollapsed} />
-          <SidebarItem icon={Users} label="Funcionários" active={activeTab === 'employees'} onClick={() => setActiveTab('employees')} collapsed={isCollapsed} />
-          <SidebarItem icon={TableIcon} label="Mesas" active={activeTab === 'tables'} onClick={() => setActiveTab('tables')} collapsed={isCollapsed} />
-          <SidebarItem icon={Truck} label="Delivery" active={activeTab === 'delivery'} onClick={() => setActiveTab('delivery')} collapsed={isCollapsed} />
-          <SidebarItem icon={FileText} label="Relatórios" active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} collapsed={isCollapsed} />
-          <SidebarItem icon={UserCheck} label="Clientes (Fiado)" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} collapsed={isCollapsed} />
+          <SidebarItem 
+            icon={LayoutDashboard} 
+            label="Dashboard" 
+            active={activeTab === 'dashboard'} 
+            onClick={() => setActiveTab('dashboard')} 
+            collapsed={isCollapsed} 
+            badge={pendingOrdersCount}
+          />
+          <SidebarItem 
+            icon={UtensilsCrossed} 
+            label="Cardápio" 
+            active={activeTab === 'menu'} 
+            onClick={() => setActiveTab('menu')} 
+            collapsed={isCollapsed} 
+          />
+          <SidebarItem 
+            icon={PlusCircle} 
+            label="Adicionais" 
+            active={activeTab === 'addons'} 
+            onClick={() => setActiveTab('addons')} 
+            collapsed={isCollapsed} 
+          />
+          <SidebarItem 
+            icon={Users} 
+            label="Funcionários" 
+            active={activeTab === 'employees'} 
+            onClick={() => setActiveTab('employees')} 
+            collapsed={isCollapsed} 
+          />
+          <SidebarItem 
+            icon={TableIcon} 
+            label="Mesas" 
+            active={activeTab === 'tables'} 
+            onClick={() => setActiveTab('tables')} 
+            collapsed={isCollapsed} 
+            badge={activeTablesCount}
+          />
+          <SidebarItem 
+            icon={Truck} 
+            label="Delivery" 
+            active={activeTab === 'delivery'} 
+            onClick={() => setActiveTab('delivery')} 
+            collapsed={isCollapsed} 
+            badge={activeDeliveryCount}
+          />
+          <SidebarItem 
+            icon={FileText} 
+            label="Relatórios" 
+            active={activeTab === 'reports'} 
+            onClick={() => setActiveTab('reports')} 
+            collapsed={isCollapsed} 
+          />
+          <SidebarItem 
+            icon={UserCheck} 
+            label="Clientes (Fiado)" 
+            active={activeTab === 'customers'} 
+            onClick={() => setActiveTab('customers')} 
+            collapsed={isCollapsed} 
+          />
           
           <div className="my-4 border-t border-stone-100 pt-4">
             <SidebarItem icon={ChefHat} label="Painel Cozinha" active={false} onClick={() => onViewChange('kitchen')} collapsed={isCollapsed} />
@@ -2351,7 +2711,55 @@ const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'custo
       </aside>
 
       <main className="flex-1 p-10 overflow-y-auto">
-        <header className="mb-10 flex justify-between items-end">
+        {/* Floating Real-Time New Order Notification Banner */}
+        <AnimatePresence>
+          {newOrderAlert && (
+            <motion.div
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              className="mb-6 p-4 rounded-2xl bg-amber-500 text-stone-900 shadow-xl flex items-center justify-between gap-4 border border-amber-400"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-stone-900 text-amber-400 rounded-xl flex items-center justify-center animate-bounce">
+                  <Bell size={20} />
+                </div>
+                <div>
+                  <p className="font-black text-sm uppercase tracking-wide">{newOrderAlert.title}</p>
+                  <p className="text-xs font-semibold text-stone-900/80">Valor Total: R$ {newOrderAlert.total.toFixed(2)} • Chegou agora</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (newOrderAlert.type === 'delivery') {
+                      setActiveTab('delivery');
+                    } else if (newOrderAlert.type === 'counter') {
+                      setSelectedTableForManagement('counter');
+                      setActiveTab('tables');
+                    } else if (newOrderAlert.type === 'table') {
+                      setActiveTab('tables');
+                    } else {
+                      setActiveTab('dashboard');
+                    }
+                    setNewOrderAlert(null);
+                  }}
+                  className="bg-stone-900 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-stone-800 transition-all shadow-md"
+                >
+                  Ver Pedido
+                </button>
+                <button
+                  onClick={() => setNewOrderAlert(null)}
+                  className="p-2 text-stone-900 hover:bg-black/10 rounded-xl transition-all"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <header className="mb-10 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
           <div>
             <h2 className="text-3xl font-bold text-stone-900">
               {activeTab === 'dashboard' && 'Visão Geral'}
@@ -2363,9 +2771,33 @@ const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'custo
               {activeTab === 'reports' && 'Relatórios'}
               {activeTab === 'customers' && 'Cadastro de Clientes'}
             </h2>
-            <p className="text-stone-500">Bem-vindo ao painel de controle.</p>
+            <div className="flex items-center gap-3 mt-1">
+              <p className="text-stone-500 text-sm">Painel de controle em tempo real.</p>
+              <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-100">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Sincronizado
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => {
+                const next = !audioEnabled;
+                setAudioEnabled(next);
+                if (next) playAdminChime();
+              }}
+              className={cn(
+                "flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold transition-all",
+                audioEnabled 
+                  ? "bg-stone-900 text-white border-stone-900" 
+                  : "bg-white text-stone-500 border-stone-200 hover:text-stone-900"
+              )}
+              title={audioEnabled ? 'Desativar avisos sonoros de novos pedidos' : 'Ativar avisos sonoros'}
+            >
+              {audioEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+              <span className="hidden md:inline">{audioEnabled ? 'Som Ativado' : 'Mudo'}</span>
+            </button>
+
             <div className="text-right">
               <p className="text-sm font-bold">{currentUser?.displayName || currentUser?.email || 'Admin User'}</p>
               <p className="text-xs text-stone-400">Gerente</p>
@@ -2376,12 +2808,19 @@ const AdminPanel = ({ onViewChange, currentUser }: { onViewChange: (view: 'custo
           </div>
         </header>
 
-        {activeTab === 'dashboard' && <AdminDashboard />}
+        {activeTab === 'dashboard' && <AdminDashboard orders={orders} />}
         {activeTab === 'menu' && <MenuManagement />}
         {activeTab === 'addons' && <AddonManagement />}
         {activeTab === 'employees' && <EmployeeManagement />}
-        {activeTab === 'tables' && <TableManagement />}
-        {activeTab === 'delivery' && <DeliveryManagement />}
+        {activeTab === 'tables' && (
+          <TableManagement 
+            tables={tables} 
+            allOrders={orders} 
+            initialSelectedTable={selectedTableForManagement} 
+            onSelectTable={setSelectedTableForManagement} 
+          />
+        )}
+        {activeTab === 'delivery' && <DeliveryManagement allOrders={orders} />}
         {activeTab === 'reports' && <ReportsManagement currentUser={currentUser} isAdmin={true} printHtml={printHtml} />}
         {activeTab === 'customers' && <CustomersManagement currentUser={currentUser} isAdmin={true} printHtml={printHtml} />}
       </main>
@@ -2394,150 +2833,235 @@ const KitchenOrderCard = ({ order, kitchenTab, updateStatus, deleteOrder }: {
   kitchenTab: 'active' | 'history', 
   updateStatus: (id: string, status: string) => void, 
   deleteOrder: (id: string) => void
-}) => (
-  <motion.div 
-    layout
-    initial={{ opacity: 0, y: 20 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, scale: 0.9 }}
-    className={cn(
-      "bg-stone-800 rounded-3xl p-6 border flex flex-col h-full transition-colors",
-      order.status === 'ready' ? "border-blue-500/30" : "border-stone-700",
-      (order.status === 'paid' || order.status === 'delivered') && "opacity-75"
-    )}
-  >
-    <div className="flex justify-between items-start mb-6">
-      <div>
-        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">
-          {order.type === 'delivery' ? 'Delivery' : (order.type === 'counter' ? 'Balcão' : 'Mesa')}
-        </span>
-        <p className={cn(
-          "text-3xl font-bold",
-          order.type === 'delivery' ? "text-emerald-400" : (order.type === 'counter' && "text-blue-400")
-        )}>
-          {order.type === 'delivery' ? 'Delivery' : (order.type === 'counter' ? 'Balcão' : order.table_number)}
-        </p>
+}) => {
+  const orderDate = parseOrderDate(order.created_at);
+  const minutesElapsed = Math.max(0, Math.floor((Date.now() - orderDate.getTime()) / 60000));
+  
+  const rawStatus = (order.status || 'pending').toLowerCase();
+  const isPending = rawStatus === 'pending' || rawStatus === 'pendente';
+  const isPreparing = rawStatus === 'preparing' || rawStatus === 'preparando' || rawStatus === 'em preparo';
+  const isReady = rawStatus === 'ready' || rawStatus === 'pronto';
+  const isDelivered = rawStatus === 'delivered' || rawStatus === 'entregue' || rawStatus === 'paid' || rawStatus === 'pago';
+
+  const isDelivery = order.type === 'delivery' || !!order.delivery_info || order.table_id === -2 || String(order.table_id) === '-2';
+  const isCounter = !isDelivery && (order.type === 'counter' || order.table_id === 'counter' || String(order.table_id) === 'counter');
+  const orderType = isDelivery ? 'delivery' : (isCounter ? 'counter' : 'table');
+
+  const safeShortId = (order.id || '').length > 4 ? (order.id || '').slice(-4).toUpperCase() : (order.id || '0000').toUpperCase();
+  const safeItems = order.items || [];
+
+  return (
+    <motion.div 
+      layout
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      className={cn(
+        "bg-stone-850 bg-stone-900/90 rounded-3xl p-6 border flex flex-col h-full transition-all shadow-xl backdrop-blur-sm",
+        isReady ? "border-blue-500/60 shadow-blue-500/10 shadow-xl ring-1 ring-blue-500/30" : 
+        (isPreparing ? "border-amber-500/50 shadow-amber-500/10 ring-1 ring-amber-500/20" : 
+        (isPending ? "border-emerald-500/40 shadow-emerald-500/5" : "border-stone-800")),
+        (isDelivered || rawStatus === 'canceled' || rawStatus === 'cancelado') && "opacity-60 bg-stone-900/50"
+      )}
+    >
+      <div className="flex justify-between items-start mb-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className={cn(
+              "text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md",
+              isDelivery ? "bg-emerald-500/20 text-emerald-400" :
+              (isCounter ? "bg-cyan-500/20 text-cyan-400" : "bg-stone-800 text-stone-400")
+            )}>
+              {isDelivery ? 'Delivery' : (isCounter ? 'Balcão' : 'Mesa')}
+            </span>
+
+            {/* Elapsed Time Badge */}
+            {!isDelivered && (
+              minutesElapsed < 10 ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-800 text-stone-300">
+                  Há {minutesElapsed}m
+                </span>
+              ) : minutesElapsed < 25 ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Há {minutesElapsed}m
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse flex items-center gap-1">
+                  <Clock size={10} /> Atrasado • {minutesElapsed}m
+                </span>
+              )
+            )}
+          </div>
+
+          <p className={cn(
+            "text-2xl lg:text-3xl font-black tracking-tight",
+            isDelivery ? "text-emerald-400" : (isCounter ? "text-cyan-400" : "text-white")
+          )}>
+            {isDelivery 
+              ? (order.delivery_info?.name || 'Cliente Delivery') 
+              : (isCounter 
+                  ? (order.delivery_info?.name ? `Balcão • ${order.delivery_info.name}` : 'Balcão') 
+                  : `Mesa ${order.table_number || order.table_id || 'Mesa'}`)}
+          </p>
+        </div>
+
+        <div className="text-right">
+          <div className="flex items-center justify-end gap-1.5 mb-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase tracking-widest">#{safeShortId}</span>
+            {kitchenTab === 'history' && (
+              <button 
+                onClick={() => deleteOrder(order.id)}
+                className="text-red-400/80 hover:text-red-400 transition-colors p-1 rounded-md hover:bg-stone-800"
+                title="Excluir Pedido"
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+          </div>
+          <div className="flex flex-col items-end">
+            <span className="text-xs text-stone-400 font-mono font-medium">
+              {orderDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            {kitchenTab === 'history' && (
+              <span className="text-[10px] text-stone-500">
+                {orderDate.toLocaleDateString()}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="text-right">
-        <div className="flex items-center justify-end gap-2 mb-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Pedido</span>
-          {kitchenTab === 'history' && (
+
+      {/* Delivery details if present */}
+      {isDelivery && order.delivery_info && (
+        <div className="mb-4 bg-stone-950/60 p-3 rounded-2xl border border-stone-800 space-y-1">
+          <p className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+            <Truck size={13} /> {order.delivery_info.name}
+          </p>
+          {order.delivery_info.address && (
+            <p className="text-[11px] text-stone-300 leading-snug">{order.delivery_info.address}</p>
+          )}
+          {order.delivery_info.phone && (
+            <p className="text-[10px] text-stone-400 font-mono">{order.delivery_info.phone}</p>
+          )}
+        </div>
+      )}
+
+      {/* Items list */}
+      <div className="flex-1 space-y-2.5 mb-6 overflow-y-auto max-h-72 pr-1 custom-scrollbar">
+        {safeItems.map((item, idx) => (
+          <div key={idx} className="bg-stone-900/60 p-3 rounded-xl border border-stone-800/80">
+            <div className="flex justify-between items-start gap-2">
+              <div className="flex-1">
+                <p className="font-bold text-stone-100 text-sm leading-tight">{item.name || 'Item do Cardápio'}</p>
+                {item.observation && (
+                  <div className="flex items-center gap-1.5 mt-1.5 bg-amber-500/10 px-2 py-1 rounded-lg w-fit border border-amber-500/20">
+                    <Info size={12} className="text-amber-400 shrink-0" />
+                    <p className="text-[11px] text-amber-300 font-medium italic">{item.observation}</p>
+                  </div>
+                )}
+                {item.addons && item.addons.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {item.addons.map((a, aidx) => (
+                      <span key={aidx} className="text-[9px] bg-emerald-500/10 text-emerald-300 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider border border-emerald-500/20">
+                        + {a.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <span className="bg-emerald-500 text-stone-950 px-2 py-0.5 rounded-lg text-xs font-black shrink-0">
+                {item.quantity || 1}x
+              </span>
+            </div>
+          </div>
+        ))}
+        {safeItems.length === 0 && (
+          <p className="text-xs text-stone-500 italic text-center py-4">Nenhum item discriminado.</p>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div className="space-y-2 pt-2 border-t border-stone-800/60 mt-auto">
+        <div className="flex gap-2">
+          {isPending && (
             <button 
-              onClick={() => deleteOrder(order.id)}
-              className="text-red-500 hover:text-red-400 transition-colors p-1"
-              title="Excluir Pedido"
+              onClick={() => updateStatus(order.id, 'preparing')}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 px-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 text-sm active:scale-95"
             >
-              <Trash2 size={14} />
+              <ChefHat size={18} /> Iniciar Preparo
             </button>
           )}
-        </div>
-        <div className="flex flex-col items-end">
-          <span className="text-xs text-stone-400 font-mono">
-            {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          <p className="text-lg font-mono">#{order.id}</p>
-          {kitchenTab === 'history' && (
-            <span className="text-[10px] text-stone-500">
-              {new Date(order.created_at).toLocaleDateString()}
-            </span>
-          )}
-        </div>
-      </div>
-      
-      {order.delivery_info && (
-        <div className="mt-4 bg-stone-900/50 p-3 rounded-2xl border border-stone-700/50 space-y-1">
-          <p className="text-xs font-bold text-emerald-400">{order.delivery_info.name}</p>
-          <p className="text-[10px] text-stone-400 leading-tight">{order.delivery_info.address}</p>
-          {order.delivery_info.phone && (
-            <p className="text-[10px] text-stone-500">{order.delivery_info.phone}</p>
-          )}
-        </div>
-      )}
-    </div>
 
-    <div className="flex-1 space-y-3 mb-8">
-      {order.items.map((item, idx) => (
-        <div key={idx} className="border-b border-stone-700/50 pb-2 last:border-0">
-          <div className="flex justify-between items-start">
-            <div className="flex-1">
-              <p className="font-bold text-stone-200">{item.name}</p>
-              {item.observation && (
-                <div className="flex items-center gap-1.5 mt-1 bg-yellow-500/10 px-2 py-1 rounded-lg w-fit">
-                  <Info size={12} className="text-yellow-500" />
-                  <p className="text-[11px] text-yellow-500 font-medium italic">{item.observation}</p>
-                </div>
-              )}
-              {item.addons && item.addons.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {item.addons.map((a, aidx) => (
-                    <span key={aidx} className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-tighter">
-                      + {a.name}
-                    </span>
-                  ))}
-                </div>
-              )}
+          {isPreparing && (
+            <>
+              <button 
+                onClick={() => updateStatus(order.id, 'ready')}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 px-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-950/40 text-sm active:scale-95"
+              >
+                <CheckCircle2 size={18} /> Pronto
+              </button>
+              <button 
+                onClick={() => updateStatus(order.id, 'pending')}
+                className="bg-stone-800 hover:bg-stone-700 text-stone-400 hover:text-white p-3 rounded-xl transition-all"
+                title="Voltar para Pendente"
+              >
+                <RotateCcw size={16} />
+              </button>
+            </>
+          )}
+
+          {isReady && (
+            <>
+              <button 
+                onClick={() => updateStatus(order.id, 'delivered')}
+                className="flex-1 bg-white hover:bg-stone-100 text-stone-900 py-3 px-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 text-sm uppercase tracking-wider active:scale-95 shadow-xl"
+              >
+                <CheckCircle2 size={18} /> Entregar Pedido
+              </button>
+              <button 
+                onClick={() => updateStatus(order.id, 'preparing')}
+                className="bg-stone-800 hover:bg-stone-700 text-stone-400 hover:text-white p-3 rounded-xl transition-all"
+                title="Voltar para Em Preparo"
+              >
+                <RotateCcw size={16} />
+              </button>
+            </>
+          )}
+
+          {isDelivered && (
+            <div className="flex-1 bg-stone-800/60 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest border border-stone-800">
+              Entregue / Concluído
             </div>
-            <span className="bg-stone-700 text-white px-2.5 py-1 rounded-xl text-xs font-black ml-4">
-              {item.quantity}x
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
+          )}
 
-    <div className="space-y-3">
-      <div className="flex gap-2">
-        {order.status === 'pending' && (
           <button 
-            onClick={() => updateStatus(order.id, 'preparing')}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
+            onClick={() => handlePrint(order)}
+            className="bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white p-3 rounded-xl transition-all shrink-0 active:scale-95"
+            title="Imprimir Comanda"
           >
-            <ChefHat size={20} /> Preparar
+            <Printer size={18} />
           </button>
-        )}
-        {order.status === 'preparing' && (
-          <button 
-            onClick={() => updateStatus(order.id, 'ready')}
-            className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
-          >
-            <CheckCircle2 size={20} /> Pronto
-          </button>
-        )}
-        {order.status === 'ready' && (
-          <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
-            Pronto
-          </div>
-        )}
-        {(order.status === 'delivered' || order.status === 'paid') && (
-          <div className="flex-1 bg-stone-700/50 text-stone-400 py-3 rounded-xl font-bold text-center text-xs uppercase tracking-widest">
-            Entregue
-          </div>
-        )}
-        <button 
-          onClick={() => handlePrint(order)}
-          className="bg-stone-700 hover:bg-stone-600 p-3 rounded-xl transition-colors"
-        >
-          <Printer size={20} />
-        </button>
+        </div>
       </div>
-      {order.status === 'ready' && (
-        <button 
-          onClick={() => updateStatus(order.id, 'delivered')}
-          className="w-full bg-stone-100 text-stone-900 py-3 rounded-xl font-bold hover:bg-white transition-colors uppercase text-xs tracking-widest"
-        >
-          Entregar Pedido
-        </button>
-      )}
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};
 
 const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'admin' | 'kitchen') => void }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [kitchenTab, setKitchenTab] = useState<'active' | 'history'>('active');
   const [historyFilter, setHistoryFilter] = useState<'day' | 'week'>('day');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'preparing' | 'ready'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'table' | 'counter' | 'delivery'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  
   const [showNotification, setShowNotification] = useState(false);
   const [latestNewOrder, setLatestNewOrder] = useState<Order | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'connected' | 'reconnecting' | 'error'>('connected');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState<Date>(new Date());
+  const [refreshTick, setRefreshTick] = useState(0);
+
   const [audioEnabled, setAudioEnabled] = useState(() => {
     try {
       return localStorage.getItem('kitchen_audio_enabled') !== 'false';
@@ -2545,10 +3069,19 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
       return true;
     }
   });
+
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const audioEnabledRef = useRef(audioEnabled);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const initialLoadRef = useRef(true);
   const knownOrderIdsRef = useRef<Set<string>>(new Set());
+
+  // Timer tick every 15s to update "Há X min" elapsed badges live
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     audioEnabledRef.current = audioEnabled;
@@ -2557,12 +3090,40 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     } catch {}
   }, [audioEnabled]);
 
-  // Audio synthesizer chime using Web Audio API (0ms latency, works completely offline & in PWA)
-  const playInstantChime = () => {
+  // Audio synthesizer chime using Web Audio API (instant, works 100% offline & in PWA)
+  const getOrCreateAudioContext = () => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      if (!AudioCtx) return null;
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioCtx();
+      }
+      return audioContextRef.current;
+    } catch {
+      return null;
+    }
+  };
+
+  const unlockAudio = async () => {
+    try {
+      const ctx = getOrCreateAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+      setAudioUnlocked(true);
+      playInstantChime();
+    } catch (e) {
+      console.warn('Audio unlock warning:', e);
+    }
+  };
+
+  const playInstantChime = () => {
+    try {
+      const ctx = getOrCreateAudioContext();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
       const now = ctx.currentTime;
 
       // Note 1: 784 Hz (G5)
@@ -2605,16 +3166,27 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     }
   };
 
+  // User gesture listener to automatically unlock audio on any touch/click
+  useEffect(() => {
+    const handleGesture = () => {
+      unlockAudio();
+      window.removeEventListener('click', handleGesture);
+      window.removeEventListener('touchstart', handleGesture);
+    };
+    window.addEventListener('click', handleGesture, { once: true });
+    window.addEventListener('touchstart', handleGesture, { once: true });
+    return () => {
+      window.removeEventListener('click', handleGesture);
+      window.removeEventListener('touchstart', handleGesture);
+    };
+  }, []);
+
   const triggerOrderAlert = (order: Order) => {
     setLatestNewOrder(order);
     setShowNotification(true);
 
     if (audioEnabledRef.current) {
       playInstantChime();
-      if (audioRef.current) {
-        audioRef.current.currentTime = 0;
-        audioRef.current.play().catch(e => console.log('Audio fallback blocked:', e));
-      }
     }
 
     if ('vibrate' in navigator) {
@@ -2627,18 +3199,13 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
   };
 
   // High-performance real-time listener:
-  // 1. Dedicated query for active kitchen orders (pending, preparing, ready) - instant delivery
-  // 2. Bounded query for recent orders (limit 80) for history view without bogging down the database
+  // 1. Dedicated query for active kitchen orders (pending, pendente, preparing, preparando, ready, pronto)
+  // 2. Query for recent orders (limit 80) for history view with fallback
   useEffect(() => {
+    setSyncStatus('reconnecting');
     const qActive = query(
       collection(db, 'orders'),
-      where('status', 'in', ['pending', 'preparing', 'ready'])
-    );
-
-    const qRecent = query(
-      collection(db, 'orders'),
-      orderBy('created_at', 'desc'),
-      limit(80)
+      where('status', 'in', ['pending', 'pendente', 'preparing', 'preparando', 'ready', 'pronto'])
     );
 
     let activeMap = new Map<string, Order>();
@@ -2648,13 +3215,16 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
       const mergedMap = new Map<string, Order>();
       // First populate recent orders
       recentMap.forEach((ord, id) => mergedMap.set(id, ord));
-      // Then ensure all active orders are included/updated
+      // Then ensure all active orders take precedence and are included
       activeMap.forEach((ord, id) => mergedMap.set(id, ord));
 
       const allOrders = Array.from(mergedMap.values()).sort(
-        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        (a, b) => parseOrderDate(b.created_at).getTime() - parseOrderDate(a.created_at).getTime()
       );
       setOrders(allOrders);
+      setSyncStatus('connected');
+      setSyncError(null);
+      setLastSync(new Date());
     };
 
     const unsubActive = onSnapshot(qActive, (snapshot) => {
@@ -2673,7 +3243,8 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         snapshot.docChanges().forEach(change => {
           if (change.type === 'added') {
             const order = { id: change.doc.id, ...change.doc.data() } as Order;
-            if (!knownOrderIdsRef.current.has(order.id) && order.status === 'pending') {
+            const st = (order.status || '').toLowerCase();
+            if (!knownOrderIdsRef.current.has(order.id) && (st === 'pending' || st === 'pendente')) {
               newlyArrivedPending = order;
             }
             knownOrderIdsRef.current.add(order.id);
@@ -2688,26 +3259,48 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
         triggerOrderAlert(newlyArrivedPending);
       }
     }, (error) => {
+      console.error('Kitchen active orders error:', error);
       handleFirestoreError(error, OperationType.LIST, 'orders/active');
+      setSyncStatus('error');
+      setSyncError('Falha ao sincronizar pedidos ativos. Verifique sua conexão.');
     });
 
-    const unsubRecent = onSnapshot(qRecent, (snapshot) => {
-      const currentMap = new Map<string, Order>();
-      snapshot.docs.forEach(d => {
-        const order = { id: d.id, ...d.data() } as Order;
-        currentMap.set(d.id, order);
+    let unsubRecent: (() => void) | null = null;
+    try {
+      const qRecent = query(
+        collection(db, 'orders'),
+        orderBy('created_at', 'desc'),
+        limit(80)
+      );
+      unsubRecent = onSnapshot(qRecent, (snapshot) => {
+        const currentMap = new Map<string, Order>();
+        snapshot.docs.forEach(d => {
+          const order = { id: d.id, ...d.data() } as Order;
+          currentMap.set(d.id, order);
+        });
+        recentMap = currentMap;
+        mergeAndSetOrders();
+      }, (error) => {
+        console.warn('Recent query fallback without orderBy:', error);
+        const qFallback = query(collection(db, 'orders'), limit(80));
+        unsubRecent = onSnapshot(qFallback, (snap) => {
+          const currentMap = new Map<string, Order>();
+          snap.docs.forEach(d => {
+            currentMap.set(d.id, { id: d.id, ...d.data() } as Order);
+          });
+          recentMap = currentMap;
+          mergeAndSetOrders();
+        }, () => {});
       });
-      recentMap = currentMap;
-      mergeAndSetOrders();
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'orders/recent');
-    });
+    } catch {
+      // Ignored
+    }
 
     return () => {
       unsubActive();
-      unsubRecent();
+      if (unsubRecent) unsubRecent();
     };
-  }, []);
+  }, [refreshTick]);
 
   const updateStatus = async (id: string, status: string) => {
     try {
@@ -2726,11 +3319,28 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     }
   };
 
-  const activeOrders = orders.filter(o => o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled');
+  // Helper classification to ensure NO order is lost
+  const getOrderType = (o: Order): 'table' | 'counter' | 'delivery' => {
+    if (o.type === 'delivery' || !!o.delivery_info || o.table_id === -2 || String(o.table_id) === '-2') {
+      return 'delivery';
+    }
+    if (o.type === 'counter' || o.table_id === 'counter' || String(o.table_id) === 'counter') {
+      return 'counter';
+    }
+    return 'table';
+  };
+
+  // Active orders (pending, preparing, ready)
+  const activeOrders = orders.filter(o => {
+    const st = (o.status || 'pending').toLowerCase();
+    return st !== 'paid' && st !== 'pago' && st !== 'delivered' && st !== 'entregue' && st !== 'canceled' && st !== 'cancelado';
+  });
   
+  // History orders (delivered, paid, canceled)
   const historyOrders = orders.filter(o => {
-    if (o.status !== 'paid' && o.status !== 'delivered' && o.status !== 'canceled') return false;
-    const orderDate = new Date(o.created_at);
+    const st = (o.status || 'pending').toLowerCase();
+    if (st !== 'paid' && st !== 'pago' && st !== 'delivered' && st !== 'entregue' && st !== 'canceled' && st !== 'cancelado') return false;
+    const orderDate = parseOrderDate(o.created_at);
     const now = new Date();
     if (historyFilter === 'day') {
       return orderDate.toDateString() === now.toDateString();
@@ -2741,110 +3351,219 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
     }
   });
 
-  const displayOrders = kitchenTab === 'active' ? activeOrders : historyOrders;
+  const baseOrders = kitchenTab === 'active' ? activeOrders : historyOrders;
+
+  // Search and status filter application
+  const displayOrders = baseOrders.filter(o => {
+    // Status filter (active tab only)
+    if (kitchenTab === 'active' && statusFilter !== 'all') {
+      const st = (o.status || 'pending').toLowerCase();
+      if (statusFilter === 'pending' && !(st === 'pending' || st === 'pendente')) return false;
+      if (statusFilter === 'preparing' && !(st === 'preparing' || st === 'preparando' || st === 'em preparo')) return false;
+      if (statusFilter === 'ready' && !(st === 'ready' || st === 'pronto')) return false;
+    }
+
+    // Type filter
+    if (typeFilter !== 'all') {
+      const oType = getOrderType(o);
+      if (oType !== typeFilter) return false;
+    }
+
+    // Search query filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const orderId = (o.id || '').toLowerCase();
+      const tableNum = String(o.table_number || o.table_id || '').toLowerCase();
+      const customerName = (o.delivery_info?.name || '').toLowerCase();
+      const itemsMatch = (o.items || []).some(i => (i.name || '').toLowerCase().includes(q) || (i.observation || '').toLowerCase().includes(q));
+
+      if (!orderId.includes(q) && !tableNum.includes(q) && !customerName.includes(q) && !itemsMatch) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 
   const groupedOrders = {
-    table: displayOrders.filter(o => o.type === 'table'),
-    counter: displayOrders.filter(o => o.type === 'counter'),
-    delivery: displayOrders.filter(o => o.type === 'delivery'),
+    table: displayOrders.filter(o => getOrderType(o) === 'table'),
+    counter: displayOrders.filter(o => getOrderType(o) === 'counter'),
+    delivery: displayOrders.filter(o => getOrderType(o) === 'delivery'),
   };
 
-  return (
-    <div className="min-h-screen bg-stone-900 text-white p-8 relative overflow-hidden">
-      <audio 
-        ref={audioRef} 
-        src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" 
-        preload="auto"
-      />
+  const pendingCount = activeOrders.filter(o => {
+    const st = (o.status || 'pending').toLowerCase();
+    return st === 'pending' || st === 'pendente';
+  }).length;
 
+  const preparingCount = activeOrders.filter(o => {
+    const st = (o.status || 'pending').toLowerCase();
+    return st === 'preparing' || st === 'preparando' || st === 'em preparo';
+  }).length;
+
+  const readyCount = activeOrders.filter(o => {
+    const st = (o.status || 'pending').toLowerCase();
+    return st === 'ready' || st === 'pronto';
+  }).length;
+
+  return (
+    <div className="min-h-screen bg-stone-950 text-white p-4 sm:p-8 relative overflow-x-hidden font-sans">
+      {/* Autoplay Unlock Notice Banner */}
+      {!audioUnlocked && audioEnabled && (
+        <div 
+          onClick={unlockAudio}
+          className="cursor-pointer bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 text-white px-4 py-2.5 rounded-2xl mb-6 flex items-center justify-between shadow-lg shadow-emerald-950/50 border border-emerald-400/40 animate-pulse transition-transform hover:scale-[1.01]"
+        >
+          <div className="flex items-center gap-3">
+            <div className="bg-white/20 p-2 rounded-xl">
+              <Volume2 size={20} className="animate-bounce" />
+            </div>
+            <div>
+              <p className="text-xs sm:text-sm font-bold">Toque aqui para liberar o alarme sonoro da cozinha</p>
+              <p className="text-[11px] text-emerald-100">Necessário para tocar quando chegarem novos pedidos</p>
+            </div>
+          </div>
+          <button 
+            onClick={(e) => { e.stopPropagation(); unlockAudio(); }}
+            className="bg-white text-stone-900 px-3.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider shadow-md hover:bg-stone-100 shrink-0 ml-3"
+          >
+            Liberar Som
+          </button>
+        </div>
+      )}
+
+      {/* Floating New Order Alert Banner */}
       <AnimatePresence>
         {showNotification && (
           <motion.div 
             initial={{ y: -100, opacity: 0 }}
             animate={{ y: 20, opacity: 1 }}
             exit={{ y: -100, opacity: 0 }}
-            className="fixed top-0 left-1/2 -translate-x-1/2 z-[100] bg-emerald-500 text-white px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-emerald-400"
+            className="fixed top-0 left-1/2 -translate-x-1/2 z-[100] bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-emerald-400 max-w-lg w-[90%]"
           >
-            <div className="bg-white/20 p-2 rounded-full animate-pulse">
+            <div className="bg-white/20 p-3 rounded-full animate-bounce shrink-0">
               <Bell size={24} />
             </div>
-            <div>
-              <p className="font-bold text-lg">Novo Pedido Recebido!</p>
-              <p className="text-xs text-emerald-100 font-medium">
+            <div className="flex-1 min-w-0">
+              <p className="font-black text-base sm:text-lg">Novo Pedido Recebido!</p>
+              <p className="text-xs text-emerald-100 font-medium truncate">
                 {latestNewOrder 
-                  ? (latestNewOrder.type === 'table' ? `Mesa ${latestNewOrder.table_number || ''} • Total: R$ ${latestNewOrder.total_price.toFixed(2)}` : latestNewOrder.type === 'counter' ? `Balcão • Total: R$ ${latestNewOrder.total_price.toFixed(2)}` : `Delivery: ${latestNewOrder.delivery_info?.name || 'Cliente'} • R$ ${latestNewOrder.total_price.toFixed(2)}`)
+                  ? (getOrderType(latestNewOrder) === 'table' 
+                      ? `Mesa ${latestNewOrder.table_number || latestNewOrder.table_id || ''} • Total: R$ ${(latestNewOrder.total_price || 0).toFixed(2)}` 
+                      : getOrderType(latestNewOrder) === 'counter' 
+                        ? `Balcão • Total: R$ ${(latestNewOrder.total_price || 0).toFixed(2)}` 
+                        : `Delivery: ${latestNewOrder.delivery_info?.name || 'Cliente'} • R$ ${(latestNewOrder.total_price || 0).toFixed(2)}`)
                   : 'Verifique a lista de pedidos ativos.'}
               </p>
             </div>
-            <button onClick={() => setShowNotification(false)} className="ml-4 hover:bg-white/10 p-1 rounded-lg">
+            <button onClick={() => setShowNotification(false)} className="hover:bg-white/10 p-1.5 rounded-lg shrink-0">
               <X size={20} />
             </button>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-10">
-        <div className="flex items-center gap-6">
+      {/* Main Header */}
+      <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-8">
+        <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => onViewChange('admin')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-stone-700 text-stone-400 hover:text-white hover:border-stone-500 transition-all"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-stone-800 bg-stone-900 text-stone-300 hover:text-white hover:border-stone-700 transition-all text-xs font-bold uppercase tracking-wider"
           >
-            <LayoutDashboard size={18} />
-            <span className="text-sm font-bold">Painel Admin</span>
+            <LayoutDashboard size={16} />
+            <span>Painel Admin</span>
           </button>
-          <div className="flex items-center gap-4">
-            <div className="bg-emerald-500 p-3 rounded-2xl">
-              <ChefHat size={32} />
+          
+          <div className="flex items-center gap-3.5">
+            <div className="bg-emerald-500 p-3 rounded-2xl shadow-lg shadow-emerald-950/40">
+              <ChefHat size={30} className="text-stone-950" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold">Cozinha</h1>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full animate-pulse bg-emerald-500" />
-                <span className="text-[10px] uppercase tracking-widest font-bold text-stone-500">
-                  Firebase Online
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Cozinha</h1>
+                <span className="bg-stone-800 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full">
+                  KDS Live
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <div className={cn(
+                  "w-2 h-2 rounded-full",
+                  syncStatus === 'connected' ? "bg-emerald-500 animate-pulse" : (syncStatus === 'reconnecting' ? "bg-amber-500 animate-spin" : "bg-red-500")
+                )} />
+                <span className="text-[10px] uppercase tracking-widest font-bold text-stone-400">
+                  {syncStatus === 'connected' ? 'Sincronizado em tempo real' : (syncStatus === 'reconnecting' ? 'Reconectando...' : 'Erro de conexão')}
+                </span>
+                <span className="text-[10px] text-stone-600 font-mono">
+                  • {lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </span>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
+        {/* Action Controls & Sound */}
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          {/* Refresh button */}
           <button 
-            onClick={() => {
-              const nextState = !audioEnabled;
-              setAudioEnabled(nextState);
-              if (nextState) {
-                playInstantChime();
-                if (audioRef.current) {
-                  audioRef.current.currentTime = 0;
-                  audioRef.current.play().catch(() => {});
-                }
-              }
-            }}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-xl border transition-all text-xs font-bold uppercase tracking-widest cursor-pointer",
-              audioEnabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-stone-800 text-stone-500 border-stone-700 hover:text-white"
-            )}
+            onClick={() => setRefreshTick(t => t + 1)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-stone-400 hover:text-white hover:border-stone-700 transition-all text-xs font-bold"
+            title="Recarregar pedidos"
           >
-            <Bell size={14} className={audioEnabled ? "animate-bounce" : ""} /> 
-            {audioEnabled ? 'Som Ativado' : 'Ativar Som'}
+            <RefreshCw size={14} className={syncStatus === 'reconnecting' ? "animate-spin" : ""} />
+            <span className="hidden sm:inline">Atualizar</span>
           </button>
 
-          <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
+          {/* Audio toggle & test */}
+          <div className="flex items-center bg-stone-900 p-1 rounded-xl border border-stone-800">
+            <button 
+              onClick={() => {
+                const nextState = !audioEnabled;
+                setAudioEnabled(nextState);
+                if (nextState) {
+                  unlockAudio();
+                }
+              }}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer",
+                audioEnabled ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" : "text-stone-500 hover:text-stone-300"
+              )}
+            >
+              {audioEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+              {audioEnabled ? 'Som Ativo' : 'Som Mudo'}
+            </button>
+            {audioEnabled && (
+              <button 
+                onClick={playInstantChime}
+                className="px-2.5 py-1.5 text-[10px] font-bold text-stone-400 hover:text-white hover:bg-stone-800 rounded-lg transition-colors ml-1 uppercase"
+                title="Tocar teste de som"
+              >
+                Testar
+              </button>
+            )}
+          </div>
+
+          {/* Active / History Switch */}
+          <div className="flex bg-stone-900 p-1 rounded-xl border border-stone-800">
             <button 
               onClick={() => setKitchenTab('active')}
               className={cn(
-                "px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
-                kitchenTab === 'active' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
+                "flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all",
+                kitchenTab === 'active' ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:text-stone-300"
               )}
             >
-              Ativos
+              <span>Ativos</span>
+              <span className={cn(
+                "px-1.5 py-0.2 rounded-md text-[10px] font-mono",
+                activeOrders.length > 0 ? "bg-emerald-500 text-stone-950 font-black" : "bg-stone-800 text-stone-400"
+              )}>
+                {activeOrders.length}
+              </span>
             </button>
             <button 
               onClick={() => setKitchenTab('history')}
               className={cn(
-                "px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all",
-                kitchenTab === 'history' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
+                "px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all",
+                kitchenTab === 'history' ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:text-stone-300"
               )}
             >
               Histórico
@@ -2852,12 +3571,12 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
           </div>
           
           {kitchenTab === 'history' && (
-            <div className="flex bg-stone-800 p-1 rounded-xl border border-stone-700">
+            <div className="flex bg-stone-900 p-1 rounded-xl border border-stone-800">
               <button 
                 onClick={() => setHistoryFilter('day')}
                 className={cn(
                   "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
-                  historyFilter === 'day' ? "bg-stone-600 text-white" : "text-stone-500 hover:text-stone-300"
+                  historyFilter === 'day' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
                 )}
               >
                 Hoje
@@ -2866,69 +3585,213 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
                 onClick={() => setHistoryFilter('week')}
                 className={cn(
                   "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
-                  historyFilter === 'week' ? "bg-stone-600 text-white" : "text-stone-500 hover:text-stone-300"
+                  historyFilter === 'week' ? "bg-stone-700 text-white" : "text-stone-500 hover:text-stone-300"
                 )}
               >
-                Semana
+                7 Dias
               </button>
             </div>
           )}
-
-          <div className="text-center border-l border-stone-800 pl-6 hidden sm:block">
-            <p className="text-2xl font-bold">{orders.filter(o => o.status !== 'paid' && o.status !== 'delivered').length}</p>
-            <p className="text-[10px] uppercase tracking-widest text-stone-500">Ativos</p>
-          </div>
         </div>
       </header>
 
-      <div className="space-y-12">
+      {/* Connection error banner if any */}
+      {syncError && (
+        <div className="mb-6 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} />
+            <span>{syncError}</span>
+          </div>
+          <button 
+            onClick={() => setRefreshTick(t => t + 1)}
+            className="bg-rose-500 text-white px-3 py-1 rounded-xl font-bold uppercase tracking-wider text-[10px]"
+          >
+            Tentar Novamente
+          </button>
+        </div>
+      )}
+
+      {/* Filter & Search Bar */}
+      <div className="bg-stone-900/80 p-3 sm:p-4 rounded-2xl border border-stone-800/80 mb-8 flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
+        {/* Sub-filters for active orders */}
+        {kitchenTab === 'active' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 mr-1 hidden sm:inline">Filtro:</span>
+            
+            <button 
+              onClick={() => setStatusFilter('all')}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5",
+                statusFilter === 'all' ? "bg-white text-stone-950 font-black" : "bg-stone-800 text-stone-400 hover:text-white"
+              )}
+            >
+              Todos <span className="text-[10px] font-mono opacity-70">({activeOrders.length})</span>
+            </button>
+
+            <button 
+              onClick={() => setStatusFilter('pending')}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5",
+                statusFilter === 'pending' ? "bg-emerald-500 text-stone-950 font-black" : "bg-stone-800 text-stone-400 hover:text-white"
+              )}
+            >
+              Aguardando <span className="text-[10px] font-mono opacity-80">({pendingCount})</span>
+            </button>
+
+            <button 
+              onClick={() => setStatusFilter('preparing')}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5",
+                statusFilter === 'preparing' ? "bg-amber-500 text-stone-950 font-black" : "bg-stone-800 text-stone-400 hover:text-white"
+              )}
+            >
+              Em Preparo <span className="text-[10px] font-mono opacity-80">({preparingCount})</span>
+            </button>
+
+            <button 
+              onClick={() => setStatusFilter('ready')}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5",
+                statusFilter === 'ready' ? "bg-blue-500 text-stone-950 font-black" : "bg-stone-800 text-stone-400 hover:text-white"
+              )}
+            >
+              Prontos <span className="text-[10px] font-mono opacity-80">({readyCount})</span>
+            </button>
+
+            <div className="h-5 w-[1px] bg-stone-800 mx-1 hidden sm:block" />
+
+            {/* Type selector */}
+            <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-800">
+              <button 
+                onClick={() => setTypeFilter('all')}
+                className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all", typeFilter === 'all' ? "bg-stone-800 text-white" : "text-stone-500")}
+              >
+                Todas
+              </button>
+              <button 
+                onClick={() => setTypeFilter('table')}
+                className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all", typeFilter === 'table' ? "bg-stone-800 text-white" : "text-stone-500")}
+              >
+                Mesas
+              </button>
+              <button 
+                onClick={() => setTypeFilter('counter')}
+                className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all", typeFilter === 'counter' ? "bg-stone-800 text-white" : "text-stone-500")}
+              >
+                Balcão
+              </button>
+              <button 
+                onClick={() => setTypeFilter('delivery')}
+                className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all", typeFilter === 'delivery' ? "bg-stone-800 text-white" : "text-stone-500")}
+              >
+                Delivery
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-stone-400 font-bold uppercase tracking-wider flex items-center gap-2">
+            <span>Histórico de Pedidos Finalizados</span>
+            <span className="bg-stone-800 px-2 py-0.5 rounded text-[10px] font-mono text-stone-300">{displayOrders.length} pedidos</span>
+          </div>
+        )}
+
+        {/* Search input */}
+        <div className="relative min-w-[200px] md:w-64">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
+          <input 
+            type="text"
+            placeholder="Buscar mesa, pedido, item..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-stone-950 border border-stone-800 rounded-xl pl-9 pr-8 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-emerald-500/60"
+          />
+          {searchQuery && (
+            <button 
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-500 hover:text-white"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Orders View */}
+      <div className="space-y-10">
         {kitchenTab === 'active' ? (
           <>
+            {/* Mesas Section */}
             {groupedOrders.table.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
-                  <TableIcon size={24} className="text-stone-500" />
-                  <h2 className="text-xl font-bold uppercase tracking-widest">Mesas</h2>
-                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.table.length}</span>
+              <section className="space-y-4">
+                <div className="flex items-center gap-3 border-b border-stone-800/80 pb-3">
+                  <div className="p-1.5 rounded-lg bg-stone-800 text-stone-300">
+                    <TableIcon size={18} />
+                  </div>
+                  <h2 className="text-base font-black uppercase tracking-wider text-stone-200">Pedidos de Mesa</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded-md text-xs font-mono font-bold text-stone-400">{groupedOrders.table.length}</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.table.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
+                      <KitchenOrderCard 
+                        key={order.id} 
+                        order={order} 
+                        kitchenTab={kitchenTab} 
+                        updateStatus={updateStatus} 
+                        deleteOrder={deleteOrder} 
+                      />
                     ))}
                   </AnimatePresence>
                 </div>
               </section>
             )}
 
+            {/* Balcão Section */}
             {groupedOrders.counter.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
-                  <Coffee size={24} className="text-stone-500" />
-                  <h2 className="text-xl font-bold uppercase tracking-widest">Balcão</h2>
-                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.counter.length}</span>
+              <section className="space-y-4">
+                <div className="flex items-center gap-3 border-b border-stone-800/80 pb-3">
+                  <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400">
+                    <Coffee size={18} />
+                  </div>
+                  <h2 className="text-base font-black uppercase tracking-wider text-cyan-300">Pedidos do Balcão</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded-md text-xs font-mono font-bold text-stone-400">{groupedOrders.counter.length}</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.counter.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
+                      <KitchenOrderCard 
+                        key={order.id} 
+                        order={order} 
+                        kitchenTab={kitchenTab} 
+                        updateStatus={updateStatus} 
+                        deleteOrder={deleteOrder} 
+                      />
                     ))}
                   </AnimatePresence>
                 </div>
               </section>
             )}
 
+            {/* Delivery Section */}
             {groupedOrders.delivery.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center gap-3 border-b border-stone-800 pb-4">
-                  <Truck size={24} className="text-stone-500" />
-                  <h2 className="text-xl font-bold uppercase tracking-widest text-emerald-500">Delivery</h2>
-                  <span className="bg-stone-800 px-2 py-0.5 rounded text-xs font-mono">{groupedOrders.delivery.length}</span>
+              <section className="space-y-4">
+                <div className="flex items-center gap-3 border-b border-stone-800/80 pb-3">
+                  <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+                    <Truck size={18} />
+                  </div>
+                  <h2 className="text-base font-black uppercase tracking-wider text-emerald-400">Delivery & Entregas</h2>
+                  <span className="bg-stone-800 px-2 py-0.5 rounded-md text-xs font-mono font-bold text-stone-400">{groupedOrders.delivery.length}</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   <AnimatePresence mode="popLayout">
                     {groupedOrders.delivery.map(order => (
-                      <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
+                      <KitchenOrderCard 
+                        key={order.id} 
+                        order={order} 
+                        kitchenTab={kitchenTab} 
+                        updateStatus={updateStatus} 
+                        deleteOrder={deleteOrder} 
+                      />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -2936,19 +3799,44 @@ const KitchenPanel = ({ onViewChange }: { onViewChange: (view: 'customer' | 'adm
             )}
 
             {displayOrders.length === 0 && (
-              <div className="py-20 text-center text-stone-500">
-                <ChefHat size={64} className="mx-auto mb-4 opacity-20" />
-                <p className="text-xl font-bold">Nenhum pedido ativo no momento.</p>
+              <div className="py-20 text-center text-stone-600 bg-stone-900/30 rounded-3xl border border-stone-800/50">
+                <ChefHat size={56} className="mx-auto mb-4 opacity-25" />
+                <p className="text-lg font-bold text-stone-400">Nenhum pedido ativo no momento.</p>
+                <p className="text-xs text-stone-600 mt-1">
+                  {searchQuery ? 'Tente ajustar os filtros ou o termo de busca.' : 'Novos pedidos enviados pelas mesas, balcão ou delivery aparecerão aqui instantaneamente.'}
+                </p>
+                {searchQuery && (
+                  <button 
+                    onClick={() => { setSearchQuery(''); setStatusFilter('all'); setTypeFilter('all'); }}
+                    className="mt-4 px-4 py-2 rounded-xl bg-stone-800 text-stone-300 hover:text-white text-xs font-bold"
+                  >
+                    Limpar Filtros
+                  </button>
+                )}
               </div>
             )}
           </>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            <AnimatePresence mode="popLayout">
-              {displayOrders.map(order => (
-                <KitchenOrderCard key={order.id} order={order} kitchenTab={kitchenTab} updateStatus={updateStatus} deleteOrder={deleteOrder} />
-              ))}
-            </AnimatePresence>
+          <div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <AnimatePresence mode="popLayout">
+                {displayOrders.map(order => (
+                  <KitchenOrderCard 
+                    key={order.id} 
+                    order={order} 
+                    kitchenTab={kitchenTab} 
+                    updateStatus={updateStatus} 
+                    deleteOrder={deleteOrder} 
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+            {displayOrders.length === 0 && (
+              <div className="py-20 text-center text-stone-600 bg-stone-900/30 rounded-3xl border border-stone-800/50">
+                <ChefHat size={56} className="mx-auto mb-4 opacity-25" />
+                <p className="text-lg font-bold text-stone-400">Nenhum histórico encontrado para este período.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2975,23 +3863,37 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
   const [itemObservation, setItemObservation] = useState('');
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([]);
   const [tableSearch, setTableSearch] = useState('');
+  const [counterCustomerName, setCounterCustomerName] = useState('');
   const [deliveryName, setDeliveryName] = useState('');
   const [deliveryPhone, setDeliveryPhone] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
 
   useEffect(() => {
-    if (initialTableId && tables.length > 0) {
-      if (typeof initialTableId === 'number' || !isNaN(Number(initialTableId))) {
-        const matched = tables.find(t => t.number === Number(initialTableId));
-        if (matched) {
-          setSelectedTable(matched.id);
-          setTableSearch(matched.number.toString());
-        }
-      } else {
-        const matched = tables.find(t => t.id === initialTableId);
-        if (matched) {
-          setSelectedTable(matched.id);
-          setTableSearch(matched.number.toString());
+    if (initialTableId != null) {
+      if (initialTableId === 'counter') {
+        setSelectedTable('counter');
+        setTableSearch('');
+        return;
+      }
+      if (initialTableId === -2 || initialTableId === '-2' || initialTableId === 'delivery') {
+        setSelectedTable(-2);
+        setTableSearch('');
+        return;
+      }
+      if (tables.length > 0) {
+        if (typeof initialTableId === 'number' || !isNaN(Number(initialTableId))) {
+          const num = Number(initialTableId);
+          const matched = tables.find(t => t.number === num) || tables.find(t => t.id === String(initialTableId));
+          if (matched) {
+            setSelectedTable(matched.id);
+            setTableSearch(matched.number.toString());
+          }
+        } else {
+          const matched = tables.find(t => t.id === initialTableId) || tables.find(t => t.number.toString() === initialTableId);
+          if (matched) {
+            setSelectedTable(matched.id);
+            setTableSearch(matched.number.toString());
+          }
         }
       }
     }
@@ -3070,27 +3972,41 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
         alert('Seu carrinho está vazio.');
         return;
       }
+
+      const isDelivery = selectedTable === -2 || selectedTable === '-2' || selectedTable === 'delivery';
+      const isCounter = selectedTable === 'counter';
       
-      if (selectedTable === -2 && (!deliveryName || !deliveryAddress)) {
+      if (isDelivery && (!deliveryName.trim() || !deliveryAddress.trim())) {
         alert('Por favor, preencha seu nome e endereço para entrega.');
         return;
       }
       
       setIsSending(true);
       try {
-        const table = typeof selectedTable === 'string' && selectedTable !== 'counter' 
-          ? tables.find(t => t.id === selectedTable) 
-          : null;
+        let table: Table | null = null;
+        if (!isDelivery && !isCounter && selectedTable != null) {
+          table = tables.find(t => t.id === String(selectedTable)) 
+               || tables.find(t => t.number === Number(selectedTable))
+               || null;
+        }
+
+        const targetTableNumber = isDelivery || isCounter ? null : (table ? table.number : (Number(selectedTable) || null));
+        const targetTableId = isCounter ? 'counter' : (isDelivery ? -2 : (table ? table.id : (targetTableNumber != null ? String(targetTableNumber) : String(selectedTable))));
+        const orderType: 'table' | 'counter' | 'delivery' = isDelivery ? 'delivery' : (isCounter ? 'counter' : 'table');
 
         const orderData = {
-          table_id: selectedTable === 'counter' ? 'counter' : (selectedTable === -2 ? -2 : selectedTable),
-          table_number: table ? table.number : null,
-          type: selectedTable === -2 ? 'delivery' : (selectedTable === 'counter' ? 'counter' : 'table'),
-          delivery_info: selectedTable === -2 ? {
-            name: deliveryName,
-            phone: deliveryPhone,
-            address: deliveryAddress
-          } : null,
+          table_id: targetTableId,
+          table_number: targetTableNumber,
+          type: orderType,
+          delivery_info: isDelivery ? {
+            name: deliveryName.trim() || 'Cliente Delivery',
+            phone: deliveryPhone.trim() || '',
+            address: deliveryAddress.trim() || ''
+          } : (isCounter && counterCustomerName.trim() ? {
+            name: counterCustomerName.trim(),
+            phone: '',
+            address: 'Balcão'
+          } : null),
           items: cart.map(i => ({ 
             item_id: i.item.id, 
             name: i.item.name,
@@ -3112,9 +4028,14 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
         const newOrderRef = doc(collection(db, 'orders'));
         batch.set(newOrderRef, orderData);
 
-        // If it's a regular table (not counter or delivery), mark it as occupied
+        // Ensure table status is set to occupied
         if (table) {
           batch.update(doc(db, 'tables', table.id), { status: 'occupied' });
+        } else if (!isCounter && !isDelivery && targetTableNumber != null) {
+          const matchingTable = tables.find(t => t.number === targetTableNumber);
+          if (matchingTable) {
+            batch.update(doc(db, 'tables', matchingTable.id), { status: 'occupied' });
+          }
         }
 
         await batch.commit();
@@ -3125,7 +4046,7 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
         setTimeout(() => {
           setOrderSent(false);
           if (onClose) onClose();
-        }, 3000);
+        }, 1200);
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, 'orders');
         alert('Erro ao enviar pedido. Por favor, verifique sua conexão e tente novamente.');
@@ -3239,7 +4160,40 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
             <div className="md:hidden w-full h-px bg-stone-200 my-2" />
 
             <div className="flex-1 w-full flex flex-col justify-center">
-              {selectedTable === -2 ? (
+              {selectedTable === 'counter' ? (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300 bg-stone-50/80 p-5 rounded-2xl border-2 border-stone-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-stone-900 text-amber-400 flex items-center justify-center">
+                        <Coffee size={20} />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-stone-900 text-base">Atendimento no Balcão</h4>
+                        <p className="text-xs text-stone-500">Retirada direta no balcão</p>
+                      </div>
+                    </div>
+                    <span className="bg-amber-100 text-amber-800 text-[10px] font-bold uppercase px-2.5 py-1 rounded-full">
+                      Pronto p/ Retirar
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 pt-2">
+                    <label className="text-[11px] uppercase tracking-wider font-bold text-stone-600 block">
+                      Nome do Cliente / Senha / Comanda (opcional)
+                    </label>
+                    <input 
+                      type="text"
+                      placeholder="Ex: João, Senha 12, Comanda 04..."
+                      className="w-full px-4 py-3 rounded-2xl border-2 border-stone-200 focus:border-stone-900 outline-none font-sans text-sm transition-all bg-white"
+                      value={counterCustomerName}
+                      onChange={e => setCounterCustomerName(e.target.value)}
+                    />
+                    <p className="text-[10px] text-stone-400">
+                      Identifica seu pedido no painel da cozinha e no momento de retirar.
+                    </p>
+                  </div>
+                </div>
+              ) : selectedTable === -2 ? (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
@@ -3488,7 +4442,7 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
                 >
                   <div className="text-left">
                     <p className="text-[10px] uppercase tracking-widest text-stone-400 flex items-center gap-1">
-                      {selectedTable === 'counter' ? 'Balcão' : (selectedTable === -2 ? 'Delivery' : (selectedTable ? `Mesa ${tables.find(t => t.id === selectedTable)?.number}` : 'Sem Mesa'))} {showCartDetails ? '↑' : '↓'}
+                      {selectedTable === 'counter' ? (counterCustomerName.trim() ? `Balcão (${counterCustomerName.trim()})` : 'Balcão') : (selectedTable === -2 ? 'Delivery' : (selectedTable ? `Mesa ${tables.find(t => t.id === selectedTable)?.number}` : 'Sem Mesa'))} {showCartDetails ? '↑' : '↓'}
                     </p>
                     <p className="text-xl font-bold">R$ {total.toFixed(2)}</p>
                   </div>
@@ -3602,12 +4556,25 @@ const CustomerMenu = ({ initialTableId, onClose, user, onViewChange }: { initial
             exit={{ opacity: 0 }}
             className="fixed inset-0 flex items-center justify-center z-[60] bg-stone-900/20 backdrop-blur-sm"
           >
-            <div className="bg-white p-12 rounded-[40px] text-center shadow-2xl border border-stone-100 max-w-sm">
-              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                <CheckCircle2 size={40} />
+            <div className="bg-white p-10 rounded-[40px] text-center shadow-2xl border border-stone-100 max-w-sm">
+              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <CheckCircle2 size={36} />
               </div>
-              <h3 className="text-3xl font-bold italic mb-2">Pedido Enviado!</h3>
-              <p className="text-stone-500 font-sans">Sua refeição já está sendo preparada com carinho.</p>
+              <h3 className="text-2xl font-bold italic mb-2">Pedido Enviado!</h3>
+              <p className="text-stone-500 font-sans text-xs">
+                {selectedTable === 'counter' 
+                  ? 'Pedido registrado no balcão e enviado à cozinha com sucesso.' 
+                  : 'Sua refeição já está sendo preparada com carinho.'}
+              </p>
+              <button 
+                onClick={() => {
+                  setOrderSent(false);
+                  if (onClose) onClose();
+                }}
+                className="mt-6 w-full bg-stone-900 text-white py-3 rounded-full font-bold text-xs uppercase tracking-wider hover:bg-stone-800 transition-all font-sans shadow-lg"
+              >
+                OK, Concluir
+              </button>
             </div>
           </motion.div>
         )}
@@ -3633,7 +4600,12 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const table = params.get('table') || params.get('table_id');
     if (table) {
-      setInitialTableId(table);
+      const lower = table.toLowerCase();
+      if (lower === 'balcao' || lower === 'balcão' || lower === 'counter') {
+        setInitialTableId('counter');
+      } else {
+        setInitialTableId(table);
+      }
       setView('customer');
     }
   }, []);
